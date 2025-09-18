@@ -67,5 +67,6 @@
     "stop_token": "cpp",
     "thread": "cpp",
     "cinttypes": "cpp"
-  }
+  },
+  "cmake.sourceDirectory": "/Users/hloth/Documents/ps4-app-merge-pkgs/splitter"
 }

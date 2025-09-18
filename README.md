@@ -61,3 +61,7 @@ Source: https://www.reddit.com/r/ps4homebrew/comments/hybr5z/solved_error_ce3860
 ## Support me
 
 [hloth.dev/donate](https://hloth.dev/donate)
+
+## License
+
+[~~copyleft my ass, orbis~~ GPLv3](./LICENSE)
