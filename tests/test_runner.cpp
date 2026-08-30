@@ -1,5 +1,7 @@
 #include "../merger-app/merger_core.hpp"
 #include "../splitter/splitter_core.hpp"
+#include "../common/manifest.hpp"
+#include "../common/sha256.hpp"
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -110,10 +112,13 @@ void test_merger_phase2_output_and_merge() {
     std::string part3_path = test_dir + "/TestGame_003.pkgpart";
     std::string output_path = test_dir + "/TestGame.pkg";
 
+    std::string manifest_path = test_dir + "/TestGame.manifest.json";
+
     std::remove(part1_path.c_str());
     std::remove(part2_path.c_str());
     std::remove(part3_path.c_str());
     std::remove(output_path.c_str());
+    std::remove(manifest_path.c_str());
 
     {
         std::ofstream p1(part1_path, std::ios::binary);
@@ -122,6 +127,20 @@ void test_merger_phase2_output_and_merge() {
         p2.write("CHUNK2_DATA_", 12);
         std::ofstream p3(part3_path, std::ios::binary);
         p3.write("CHUNK3_DATA!", 12);
+
+        std::string full_mock = "CHUNK1_DATA_CHUNK2_DATA_CHUNK3_DATA!";
+        std::string mock_hash = crypto::SHA256::hash_string(full_mock);
+
+        manifest::PkgManifest m;
+        m.schema_version = 1;
+        m.original_filename = "TestGame.pkg";
+        m.package_base_name = "TestGame";
+        m.total_size_bytes = 36;
+        m.chunk_size_bytes = 12;
+        m.chunk_count = 3;
+        m.sha256 = mock_hash;
+        std::string m_err;
+        assert(manifest::write_manifest_file_atomic(manifest_path, m, m_err));
     }
 
     std::vector<std::string> part_files = {
@@ -205,6 +224,7 @@ void test_merger_phase2_output_and_merge() {
     std::remove(part2_path.c_str());
     std::remove(part3_path.c_str());
     std::remove(output_path.c_str());
+    std::remove(manifest_path.c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_merger_phase2_output_and_merge\n";
@@ -724,6 +744,9 @@ void test_manifest_serialization_and_parsing_roundtrip();
 void test_manifest_parser_hardening();
 void test_manifest_chunk_geometry_validation();
 void test_splitter_atomic_manifest_lifecycle();
+void test_merger_manifest_validation_and_errors();
+void test_merger_checksum_mismatch_and_collision_safe_retention();
+void test_split_manifest_merge_e2e_verification();
 
 int main() {
     std::cout << "=== Running Merger Core Tests (Phase 1 & 2) ===\n";
@@ -751,6 +774,11 @@ int main() {
     test_manifest_parser_hardening();
     test_manifest_chunk_geometry_validation();
     test_splitter_atomic_manifest_lifecycle();
+
+    std::cout << "\n=== Running Integrity Verification Tests (Phase 4 - Fix #12) ===\n";
+    test_merger_manifest_validation_and_errors();
+    test_merger_checksum_mismatch_and_collision_safe_retention();
+    test_split_manifest_merge_e2e_verification();
 
     std::cout << "\n=== Running Split & Merge Integration Tests ===\n";
     test_split_and_merge_roundtrip();

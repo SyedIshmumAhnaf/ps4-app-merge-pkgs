@@ -24,10 +24,13 @@ INTDIR      := $(PROJDIR)/x64/Debug
 # Define objects to build
 CFILES      := $(wildcard $(PROJDIR)/*.c)
 CPPFILES    := $(wildcard $(PROJDIR)/*.cpp)
-OBJS        := $(patsubst $(PROJDIR)/%.c, $(INTDIR)/%.o, $(CFILES)) $(patsubst $(PROJDIR)/%.cpp, $(INTDIR)/%.o, $(CPPFILES))
+COMMON_CPP  := $(wildcard common/*.cpp)
+OBJS        := $(patsubst $(PROJDIR)/%.c, $(INTDIR)/%.o, $(CFILES)) \
+               $(patsubst $(PROJDIR)/%.cpp, $(INTDIR)/%.o, $(CPPFILES)) \
+               $(patsubst common/%.cpp, $(INTDIR)/common_%.o, $(COMMON_CPP))
 
 # Define final C/C++ flags
-CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c $(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include
+CFLAGS      := --target=x86_64-pc-freebsd12-elf -fPIC -funwind-tables -c $(EXTRAFLAGS) -isysroot $(TOOLCHAIN) -isystem $(TOOLCHAIN)/include -Icommon
 CXXFLAGS    := $(CFLAGS) -isystem $(TOOLCHAIN)/include/c++/v1
 LDFLAGS     := -m elf_x86_64 -pie --script $(TOOLCHAIN)/link.x --eh-frame-hdr -L$(TOOLCHAIN)/lib $(LIBS) $(TOOLCHAIN)/lib/crt1.o
 
@@ -83,6 +86,9 @@ $(INTDIR)/%.o: $(PROJDIR)/%.c
 	$(CC) $(CFLAGS) -o $@ $<
 
 $(INTDIR)/%.o: $(PROJDIR)/%.cpp
+	$(CCX) $(CXXFLAGS) -o $@ $<
+
+$(INTDIR)/common_%.o: common/%.cpp
 	$(CCX) $(CXXFLAGS) -o $@ $<
 
 clean:

@@ -1,4 +1,6 @@
 #include "../merger-app/merger_core.hpp"
+#include "../common/manifest.hpp"
+#include "../common/sha256.hpp"
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -107,11 +109,14 @@ void test_phase2_output_and_merge() {
     std::string part3_path = test_dir + "/TestGame_003.pkgpart";
     std::string output_path = test_dir + "/TestGame.pkg";
 
+    std::string manifest_path = test_dir + "/TestGame.manifest.json";
+
     // Clean up potential leftovers
     std::remove(part1_path.c_str());
     std::remove(part2_path.c_str());
     std::remove(part3_path.c_str());
     std::remove(output_path.c_str());
+    std::remove(manifest_path.c_str());
 
     // Write mock data to part files
     {
@@ -121,6 +126,20 @@ void test_phase2_output_and_merge() {
         p2.write("CHUNK2_DATA_", 12);
         std::ofstream p3(part3_path, std::ios::binary);
         p3.write("CHUNK3_DATA!", 12);
+
+        std::string full_mock = "CHUNK1_DATA_CHUNK2_DATA_CHUNK3_DATA!";
+        std::string mock_hash = crypto::SHA256::hash_string(full_mock);
+
+        manifest::PkgManifest m;
+        m.schema_version = 1;
+        m.original_filename = "TestGame.pkg";
+        m.package_base_name = "TestGame";
+        m.total_size_bytes = 36;
+        m.chunk_size_bytes = 12;
+        m.chunk_count = 3;
+        m.sha256 = mock_hash;
+        std::string m_err;
+        assert(manifest::write_manifest_file_atomic(manifest_path, m, m_err));
     }
 
     std::vector<std::string> part_files = {
@@ -221,6 +240,7 @@ void test_phase2_output_and_merge() {
     std::remove(part2_path.c_str());
     std::remove(part3_path.c_str());
     std::remove(output_path.c_str());
+    std::remove(manifest_path.c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_phase2_output_and_merge\n";

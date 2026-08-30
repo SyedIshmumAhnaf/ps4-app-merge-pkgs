@@ -54,6 +54,9 @@ std::string get_temporary_merge_path(const std::string& output_path);
 // Used before pre-flight free space checks so interrupted merges do not block their own retry.
 bool clean_stale_temp_file(const std::string& output_path);
 
+// Finds a collision-safe path for retaining failed outputs, e.g. <output_path>.checksum-failed(.N)
+std::string get_collision_safe_failed_path(const std::string& output_path);
+
 // Free-space safety multiplier documented in README (Fix #7)
 constexpr uint64_t FREE_SPACE_MULTIPLIER = 2;
 
@@ -65,8 +68,6 @@ bool compute_required_space(uint64_t total_parts_size, uint64_t multiplier, uint
 // Returns available bytes in out_free_bytes. Returns false on error.
 bool get_available_space(const std::string& target_path, uint64_t& out_free_bytes);
 
-
-
 // Calculates the total size in bytes of the listed input files within input_dir
 uint64_t calculate_total_parts_size(const std::string& input_dir, const std::vector<std::string>& files);
 
@@ -77,19 +78,31 @@ enum class MergeStatus {
     WRITE_ERROR,
     READ_ERROR,
     INSUFFICIENT_SPACE,
-    POST_RENAME_SYNC_ERROR
+    POST_RENAME_SYNC_ERROR,
+    MANIFEST_NOT_FOUND,
+    MANIFEST_INVALID,
+    MANIFEST_MISMATCH,
+    GEOMETRY_MISMATCH,
+    CHECKSUM_MISMATCH
 };
-
 
 struct MergeResult {
-    MergeStatus status;
+    MergeStatus status = MergeStatus::SUCCESS;
     std::string error_message;
     uint64_t bytes_written = 0;
+    std::string computed_sha256;
+    std::string expected_sha256;
+    std::string retained_failed_path;
+    std::string manifest_path;
 };
 
-// Merges files from input_dir into output_path with per-chunk write validation (Fix #6)
-// If a write or read fails, cleans up the partial output file.
-// If progress_callback is provided, it is invoked with (bytes_processed, total_bytes).
+// Merges files from input_dir into output_path with per-chunk write validation (Fix #6),
+// on-the-fly streaming SHA-256 calculation, and manifest verification (Fix #12).
+// - Validates manifest and chunk geometry upfront.
+// - Streams single-pass SHA-256 during copy loop.
+// - If checksum matches: atomically moves temp file to output_path and syncs parent dir.
+// - If checksum mismatches: retains temp output as collision-free .checksum-failed(.N) and does NOT publish to output_path.
+// - If I/O or read/write error occurs: removes partial temp file.
 MergeResult perform_merge(
     const std::string& input_dir,
     const std::vector<std::string>& files,
@@ -98,4 +111,3 @@ MergeResult perform_merge(
 );
 
 } // namespace merger
-

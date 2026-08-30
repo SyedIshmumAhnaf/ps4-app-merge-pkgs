@@ -1,6 +1,7 @@
 #include "../common/sha256.hpp"
 #include "../common/manifest.hpp"
 #include "../splitter/splitter_core.hpp"
+#include "../merger-app/merger_core.hpp"
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -277,4 +278,219 @@ void test_splitter_atomic_manifest_lifecycle() {
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_splitter_atomic_manifest_lifecycle\n";
+}
+
+void test_merger_manifest_validation_and_errors() {
+    std::string test_dir = "/tmp/pkg_test_merger_manifest_errs";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string p1 = test_dir + "/ValGame_001.pkgpart";
+    std::string p2 = test_dir + "/ValGame_002.pkgpart";
+    std::string mpath = test_dir + "/ValGame.manifest.json";
+    std::string out_pkg = test_dir + "/ValGame.pkg";
+
+    {
+        std::ofstream(p1, std::ios::binary).write("AAAAA", 5);
+        std::ofstream(p2, std::ios::binary).write("BBBBB", 5);
+    }
+    std::vector<std::string> parts = {"ValGame_001.pkgpart", "ValGame_002.pkgpart"};
+
+    // 1. Missing manifest
+    std::remove(mpath.c_str());
+    auto res_missing = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res_missing.status == merger::MergeStatus::MANIFEST_NOT_FOUND);
+    assert(!merger::file_exists(out_pkg));
+
+    // 2. Malformed JSON manifest
+    {
+        std::ofstream(mpath, std::ios::binary).write("INVALID_JSON{", 13);
+    }
+    auto res_malformed = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res_malformed.status == merger::MergeStatus::MANIFEST_INVALID);
+
+    // 3. Package base name mismatch in manifest
+    {
+        manifest::PkgManifest m;
+        m.schema_version = 1;
+        m.original_filename = "WrongGame.pkg";
+        m.package_base_name = "WrongGame";
+        m.total_size_bytes = 10;
+        m.chunk_size_bytes = 5;
+        m.chunk_count = 2;
+        m.sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        std::string err;
+        assert(manifest::write_manifest_file_atomic(mpath, m, err));
+    }
+    auto res_mismatch = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res_mismatch.status == merger::MergeStatus::MANIFEST_MISMATCH);
+
+    // 4. Geometry / chunk count mismatch
+    {
+        manifest::PkgManifest m;
+        m.schema_version = 1;
+        m.original_filename = "ValGame.pkg";
+        m.package_base_name = "ValGame";
+        m.total_size_bytes = 15; // Claimed 15, but actual parts total 10
+        m.chunk_size_bytes = 5;
+        m.chunk_count = 3;
+        m.sha256 = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
+        std::string err;
+        assert(manifest::write_manifest_file_atomic(mpath, m, err));
+    }
+    auto res_geom = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res_geom.status == merger::MergeStatus::MANIFEST_MISMATCH ||
+           res_geom.status == merger::MergeStatus::GEOMETRY_MISMATCH);
+
+    // Cleanup
+    std::remove(p1.c_str());
+    std::remove(p2.c_str());
+    std::remove(mpath.c_str());
+    std::remove(out_pkg.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_merger_manifest_validation_and_errors\n";
+}
+
+void test_merger_checksum_mismatch_and_collision_safe_retention() {
+    std::string test_dir = "/tmp/pkg_test_merger_checksum_fail";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string p1 = test_dir + "/FailGame_001.pkgpart";
+    std::string p2 = test_dir + "/FailGame_002.pkgpart";
+    std::string mpath = test_dir + "/FailGame.manifest.json";
+    std::string out_pkg = test_dir + "/FailGame.pkg";
+
+    std::string expected_data = "CORRECT_BLOCK_1_CORRECT_BLOCK_2_";
+    std::string correct_hash = crypto::SHA256::hash_string(expected_data);
+
+    // Part 1 is correct (16 bytes)
+    {
+        std::ofstream(p1, std::ios::binary).write("CORRECT_BLOCK_1_", 16);
+    }
+    // Part 2 has 1 corrupted byte ('X' instead of '2')
+    {
+        std::ofstream(p2, std::ios::binary).write("CORRECT_BLOCK_X_", 16);
+    }
+
+    manifest::PkgManifest m;
+    m.schema_version = 1;
+    m.original_filename = "FailGame.pkg";
+    m.package_base_name = "FailGame";
+    m.total_size_bytes = 32;
+    m.chunk_size_bytes = 16;
+    m.chunk_count = 2;
+    m.sha256 = correct_hash;
+    std::string err;
+    assert(manifest::write_manifest_file_atomic(mpath, m, err));
+
+    std::vector<std::string> parts = {"FailGame_001.pkgpart", "FailGame_002.pkgpart"};
+
+    // 1st Attempt: Checksum mismatch -> creates FailGame.pkg.checksum-failed
+    auto res1 = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res1.status == merger::MergeStatus::CHECKSUM_MISMATCH);
+    assert(!merger::file_exists(out_pkg)); // Final .pkg NEVER published!
+    std::string failed_artifact_1 = test_dir + "/FailGame.pkg.checksum-failed";
+    assert(merger::file_exists(failed_artifact_1));
+    assert(res1.retained_failed_path == failed_artifact_1);
+    assert(res1.expected_sha256 == correct_hash);
+    assert(res1.computed_sha256 != correct_hash);
+
+    // Verify content of retained failed output
+    {
+        std::ifstream f(failed_artifact_1, std::ios::binary);
+        std::string data((std::istreambuf_iterator<char>(f)), std::istreambuf_iterator<char>());
+        assert(data == "CORRECT_BLOCK_1_CORRECT_BLOCK_X_");
+    }
+
+    // 2nd Attempt: Pre-existing .checksum-failed artifact present -> collision safe -> creates .checksum-failed.1
+    auto res2 = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res2.status == merger::MergeStatus::CHECKSUM_MISMATCH);
+    std::string failed_artifact_2 = test_dir + "/FailGame.pkg.checksum-failed.1";
+    assert(merger::file_exists(failed_artifact_1)); // Original still intact!
+    assert(merger::file_exists(failed_artifact_2));
+    assert(res2.retained_failed_path == failed_artifact_2);
+
+    // 3rd Attempt: Pre-existing .checksum-failed and .checksum-failed.1 present -> creates .checksum-failed.2
+    auto res3 = merger::perform_merge(test_dir, parts, out_pkg);
+    assert(res3.status == merger::MergeStatus::CHECKSUM_MISMATCH);
+    std::string failed_artifact_3 = test_dir + "/FailGame.pkg.checksum-failed.2";
+    assert(merger::file_exists(failed_artifact_1));
+    assert(merger::file_exists(failed_artifact_2));
+    assert(merger::file_exists(failed_artifact_3));
+    assert(res3.retained_failed_path == failed_artifact_3);
+
+    // Cleanup
+    std::remove(p1.c_str());
+    std::remove(p2.c_str());
+    std::remove(mpath.c_str());
+    std::remove(failed_artifact_1.c_str());
+    std::remove(failed_artifact_2.c_str());
+    std::remove(failed_artifact_3.c_str());
+    std::remove(out_pkg.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_merger_checksum_mismatch_and_collision_safe_retention\n";
+}
+
+void test_split_manifest_merge_e2e_verification() {
+    std::string test_dir = "/tmp/pkg_test_e2e_full";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string original_pkg = test_dir + "/FinalFantasy.pkg";
+    std::string reconstructed_pkg = test_dir + "/FinalFantasy_Reconstructed.pkg";
+
+    // 1234 bytes of diverse binary data
+    std::string payload;
+    payload.reserve(1234);
+    for (size_t i = 0; i < 1234; ++i) {
+        payload.push_back(static_cast<char>((i * 37 + 17) % 256));
+    }
+    std::string expected_hash = crypto::SHA256::hash_string(payload);
+
+    {
+        std::ofstream out(original_pkg, std::ios::binary);
+        out.write(payload.data(), payload.size());
+    }
+
+    // Step 1: Split into 250-byte chunks with automatic manifest generation
+    splitter::SplitOptions split_opts;
+    split_opts.chunk_size_bytes = 250;
+    split_opts.output_dir = test_dir;
+    split_opts.force_overwrite = true;
+
+    auto split_res = splitter::split_file(original_pkg, split_opts);
+    assert(split_res.status == splitter::SplitStatus::SUCCESS);
+    assert(split_res.parts_count == 5); // 250*4 + 234 = 1234
+    assert(split_res.sha256 == expected_hash);
+    assert(splitter::file_exists(split_res.manifest_path));
+
+    // Step 2: Merger input validation
+    auto val_res = merger::validate_and_prepare_parts(split_res.generated_parts);
+    assert(val_res.status == merger::ValidationStatus::OK);
+    assert(val_res.single_base_name == "FinalFantasy");
+    assert(val_res.sorted_files.size() == 5);
+
+    // Step 3: Single-pass streaming merge with hash verification
+    auto merge_res = merger::perform_merge(test_dir, val_res.sorted_files, reconstructed_pkg);
+    assert(merge_res.status == merger::MergeStatus::SUCCESS);
+    assert(merge_res.bytes_written == 1234);
+    assert(merge_res.computed_sha256 == expected_hash);
+    assert(merge_res.expected_sha256 == expected_hash);
+    assert(merger::file_exists(reconstructed_pkg));
+
+    // Step 4: Verify reconstructed file matches original byte-for-byte
+    {
+        std::ifstream in(reconstructed_pkg, std::ios::binary);
+        std::string recon_data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+        assert(recon_data == payload);
+    }
+
+    // Cleanup
+    for (const auto& p : split_res.generated_parts) std::remove(p.c_str());
+    std::remove(split_res.manifest_path.c_str());
+    std::remove(original_pkg.c_str());
+    std::remove(reconstructed_pkg.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_split_manifest_merge_e2e_verification (Full split->manifest->merge->verify->publish verified)\n";
 }
