@@ -7,6 +7,9 @@
 #include <cstdio>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
+#include <fcntl.h>
+#include <unistd.h>
+
 
 
 namespace merger {
@@ -157,6 +160,18 @@ bool file_exists(const std::string& path) {
     return (stat(path.c_str(), &st) == 0);
 }
 
+std::string get_temporary_merge_path(const std::string& output_path) {
+    return output_path + ".tmp.merging";
+}
+
+bool clean_stale_temp_file(const std::string& output_path) {
+    std::string temp_path = get_temporary_merge_path(output_path);
+    if (file_exists(temp_path)) {
+        return (std::remove(temp_path.c_str()) == 0);
+    }
+    return true;
+}
+
 bool compute_required_space(uint64_t total_parts_size, uint64_t multiplier, uint64_t& out_required_bytes) {
     if (multiplier == 0) {
         out_required_bytes = total_parts_size;
@@ -221,8 +236,8 @@ MergeResult perform_merge(
 
     // [P1] Write to a temporary path until the merge completes.
     // This ensures power loss, crash, or early abort leaves no partial file at output_path,
-    // and preserves any existing output_path until the new file is fully written, flushed, and closed.
-    std::string temp_output_path = output_path + ".tmp.merging";
+    // and preserves any existing output_path until the new file is fully written, flushed, fsync'd, and closed.
+    std::string temp_output_path = get_temporary_merge_path(output_path);
     std::remove(temp_output_path.c_str());
 
     std::ofstream output_file(temp_output_path, std::ios::binary);
@@ -300,6 +315,25 @@ MergeResult perform_merge(
         return result;
     }
 
+    // [P1] Durable storage synchronization:
+    // Sync the temporary file blocks and metadata to physical storage before replacing the destination.
+    int temp_fd = open(temp_output_path.c_str(), O_RDONLY);
+    if (temp_fd >= 0) {
+        if (fsync(temp_fd) != 0) {
+            close(temp_fd);
+            std::remove(temp_output_path.c_str());
+            result.status = MergeStatus::WRITE_ERROR;
+            result.error_message = "Failed to sync temporary file to durable storage: " + temp_output_path;
+            return result;
+        }
+        close(temp_fd);
+    } else {
+        std::remove(temp_output_path.c_str());
+        result.status = MergeStatus::WRITE_ERROR;
+        result.error_message = "Failed to open temporary file for sync: " + temp_output_path;
+        return result;
+    }
+
     // Atomic move/rename from temp path to destination path
     if (std::rename(temp_output_path.c_str(), output_path.c_str()) != 0) {
         std::remove(temp_output_path.c_str());
@@ -308,9 +342,21 @@ MergeResult perform_merge(
         return result;
     }
 
-    return result;
+    // Sync parent directory so directory entry update (rename) is persisted durably
+    std::string dir_path = output_path;
+    size_t last_slash = dir_path.find_last_of('/');
+    if (last_slash != std::string::npos) {
+        dir_path = (last_slash == 0) ? "/" : dir_path.substr(0, last_slash);
+        int dir_fd = open(dir_path.c_str(), O_RDONLY);
+        if (dir_fd >= 0) {
+            fsync(dir_fd);
+            close(dir_fd);
+        }
+    }
 
+    return result;
 }
 
 } // namespace merger
+
 

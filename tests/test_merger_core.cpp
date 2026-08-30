@@ -145,12 +145,22 @@ void test_phase2_output_and_merge() {
     uint64_t overflow_out = 0;
     assert(!merger::compute_required_space(UINT64_MAX / 2 + 1, 2, overflow_out));
 
+    // Test clean_stale_temp_file: simulate stale temp file left after an interrupted run
+    std::string stale_temp_file = merger::get_temporary_merge_path(output_path);
+    {
+        std::ofstream st(stale_temp_file, std::ios::binary);
+        st.write("STALE_DATA_FROM_CRASH", 21);
+    }
+    assert(merger::file_exists(stale_temp_file));
+    assert(merger::clean_stale_temp_file(output_path));
+    assert(!merger::file_exists(stale_temp_file)); // Stale temp cleaned up prior to space check
+
     // Test get_available_space
     uint64_t free_bytes = 0;
     assert(merger::get_available_space(test_dir, free_bytes));
     assert(free_bytes > 0);
 
-    // Test perform_merge happy path (atomically written and renamed from .tmp.merging)
+    // Test perform_merge happy path (atomically written, fsync'd, and renamed from .tmp.merging)
     uint64_t progress_last_processed = 0;
     auto progress_cb = [](uint64_t processed, uint64_t total) {
         assert(total == 36);
@@ -162,7 +172,7 @@ void test_phase2_output_and_merge() {
     assert(res.status == merger::MergeStatus::SUCCESS);
     assert(res.bytes_written == 36);
     assert(merger::file_exists(output_path));
-    assert(!merger::file_exists(output_path + ".tmp.merging")); // temp file cleanly removed / renamed
+    assert(!merger::file_exists(merger::get_temporary_merge_path(output_path))); // temp file cleanly removed / renamed
 
     // Verify content
     {
@@ -186,7 +196,7 @@ void test_phase2_output_and_merge() {
     };
     auto fail_res = merger::perform_merge(test_dir, broken_parts, output_path);
     assert(fail_res.status == merger::MergeStatus::INPUT_OPEN_ERROR);
-    assert(!merger::file_exists(output_path + ".tmp.merging")); // temp file cleaned up
+    assert(!merger::file_exists(merger::get_temporary_merge_path(output_path))); // temp file cleaned up
 
     // Verify existing file at output_path was NOT truncated or destroyed
     {
@@ -204,6 +214,7 @@ void test_phase2_output_and_merge() {
 
     std::cout << "[PASS] test_phase2_output_and_merge\n";
 }
+
 
 
 int main() {

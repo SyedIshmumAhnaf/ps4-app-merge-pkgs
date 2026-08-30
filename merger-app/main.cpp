@@ -271,6 +271,13 @@ int main(void)
         userTextStream << "\nTotal size: " << (totalSize / (1024 * 1024)) << " MB\n";
         userTextStream << "Estimated time: " << formatTime(estimatedTimeInSeconds) << "\n";
 
+        std::string baseFileName = validation.single_base_name;
+        std::string outputPath = "/data/pkg/" + baseFileName + ".pkg";
+
+        // [P1] Clean any stale temporary merge file (<output>.tmp.merging) from prior interrupted runs
+        // before checking free space so it doesn't block its own retry (Fix #7 / Review P1)
+        merger::clean_stale_temp_file(outputPath);
+
         // Pre-flight free-space check with 2x multiplier (Fix #7, Review P2)
         uint64_t required_space = 0;
         bool mult_ok = merger::compute_required_space(totalSize, merger::FREE_SPACE_MULTIPLIER, required_space);
@@ -304,6 +311,7 @@ int main(void)
                 listen = true;
             }
         }
+
         else
         {
             userTextStream << "\n[WARNING] Could not check free space on /data/pkg. Proceed with caution.\n";
