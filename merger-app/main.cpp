@@ -274,34 +274,53 @@ int main(void)
         std::string baseFileName = validation.single_base_name;
         std::string outputPath = "/data/pkg/" + baseFileName + ".pkg";
 
-        // [P1] Clean any stale temporary merge file (<output>.tmp.merging) from prior interrupted runs
-        // before checking free space so it doesn't block its own retry (Fix #7 / Review P1)
-        merger::clean_stale_temp_file(outputPath);
-
-        // Pre-flight free-space check with 2x multiplier (Fix #7, Review P2)
-        uint64_t required_space = 0;
-        bool mult_ok = merger::compute_required_space(totalSize, merger::FREE_SPACE_MULTIPLIER, required_space);
-
-        uint64_t available_space = 0;
-        if (!mult_ok)
+        // [P1/P2] Clean any stale temporary merge file (<output>.tmp.merging) from prior interrupted runs
+        // before checking free space so it doesn't block its own retry (Fix #7 / Review P1/P2).
+        // If cleanup fails due to permissions or I/O error, report the failure and stop before checking free space.
+        if (!merger::clean_stale_temp_file(outputPath))
         {
-            userTextStream << "\n[ERROR] Package total size exceeds maximum supported limits.\n";
+            userTextStream << "\n[ERROR] Failed to clean up stale temporary merge file: "
+                           << merger::get_temporary_merge_path(outputPath) << "\n"
+                           << "Please remove this file manually via FTP or PS4 Xplorer before retrying.\n";
         }
-        else if (merger::get_available_space("/data/pkg", available_space))
+        else
         {
-            userTextStream << "Available space on /data/pkg: " << (available_space / (1024 * 1024)) << " MB\n";
-            userTextStream << "Required free space (" << merger::FREE_SPACE_MULTIPLIER << "x): " << (required_space / (1024 * 1024)) << " MB\n";
+            // Pre-flight free-space check with 2x multiplier (Fix #7, Review P2)
+            uint64_t required_space = 0;
+            bool mult_ok = merger::compute_required_space(totalSize, merger::FREE_SPACE_MULTIPLIER, required_space);
 
-            if (available_space < required_space)
+            uint64_t available_space = 0;
+            if (!mult_ok)
             {
-                userTextStream << "\n[ERROR] Insufficient disk space!\n"
-                               << "Required (2x package size): " << (required_space / (1024 * 1024)) << " MB\n"
-                               << "Available: " << (available_space / (1024 * 1024)) << " MB.\n"
-                               << "Please free up disk space on PS4 internal storage before merging.\n";
+                userTextStream << "\n[ERROR] Package total size exceeds maximum supported limits.\n";
+            }
+            else if (merger::get_available_space("/data/pkg", available_space))
+            {
+                userTextStream << "Available space on /data/pkg: " << (available_space / (1024 * 1024)) << " MB\n";
+                userTextStream << "Required free space (" << merger::FREE_SPACE_MULTIPLIER << "x): " << (required_space / (1024 * 1024)) << " MB\n";
+
+                if (available_space < required_space)
+                {
+                    userTextStream << "\n[ERROR] Insufficient disk space!\n"
+                                   << "Required (2x package size): " << (required_space / (1024 * 1024)) << " MB\n"
+                                   << "Available: " << (available_space / (1024 * 1024)) << " MB.\n"
+                                   << "Please free up disk space on PS4 internal storage before merging.\n";
+                }
+                else
+                {
+                    userTextStream << "App will be frozen entire time, do not worry and look\nif .pkg file started appearing in /data/pkg directory via FTP\nAllow up to 3x of that estimated time\n";
+                    userTextStream << "\nPress any button on controller to START merging parts\n\n";
+                    if (!controller->Init(-1))
+                    {
+                        userTextStream << "Couldn't initialize controller\n";
+                        for (;;);
+                    }
+                    listen = true;
+                }
             }
             else
             {
-                userTextStream << "App will be frozen entire time, do not worry and look\nif .pkg file started appearing in /data/pkg directory via FTP\nAllow up to 3x of that estimated time\n";
+                userTextStream << "\n[WARNING] Could not check free space on /data/pkg. Proceed with caution.\n";
                 userTextStream << "\nPress any button on controller to START merging parts\n\n";
                 if (!controller->Init(-1))
                 {
@@ -311,19 +330,8 @@ int main(void)
                 listen = true;
             }
         }
-
-        else
-        {
-            userTextStream << "\n[WARNING] Could not check free space on /data/pkg. Proceed with caution.\n";
-            userTextStream << "\nPress any button on controller to START merging parts\n\n";
-            if (!controller->Init(-1))
-            {
-                userTextStream << "Couldn't initialize controller\n";
-                for (;;);
-            }
-            listen = true;
-        }
     }
+
 
     
     for (;;)

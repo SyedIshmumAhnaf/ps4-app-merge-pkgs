@@ -342,21 +342,35 @@ MergeResult perform_merge(
         return result;
     }
 
-    // Sync parent directory so directory entry update (rename) is persisted durably
+    // [P1/P2] Sync parent directory so directory entry update (rename) is persisted durably.
+    // Handles relative outputs (e.g. "Game.pkg" -> parent is ".") as well as absolute paths.
     std::string dir_path = output_path;
     size_t last_slash = dir_path.find_last_of('/');
     if (last_slash != std::string::npos) {
         dir_path = (last_slash == 0) ? "/" : dir_path.substr(0, last_slash);
-        int dir_fd = open(dir_path.c_str(), O_RDONLY);
-        if (dir_fd >= 0) {
-            fsync(dir_fd);
-            close(dir_fd);
-        }
+    } else {
+        dir_path = ".";
     }
+
+    int dir_fd = open(dir_path.c_str(), O_RDONLY);
+    if (dir_fd < 0) {
+        result.status = MergeStatus::WRITE_ERROR;
+        result.error_message = "Failed to open parent directory for durable synchronization: " + dir_path;
+        return result;
+    }
+
+    if (fsync(dir_fd) != 0) {
+        close(dir_fd);
+        result.status = MergeStatus::WRITE_ERROR;
+        result.error_message = "Failed to sync parent directory to durable storage: " + dir_path;
+        return result;
+    }
+    close(dir_fd);
 
     return result;
 }
 
 } // namespace merger
+
 
 

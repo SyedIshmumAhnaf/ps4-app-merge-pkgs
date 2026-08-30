@@ -205,6 +205,15 @@ void test_phase2_output_and_merge() {
         assert(content == "PREVIOUS_EXISTING_PKG");
     }
 
+    // Test perform_merge with relative output path (Fix #6 / P2: relative output parent dir sync)
+    std::string rel_output = "RelGame.pkg";
+    std::remove(rel_output.c_str());
+    auto rel_res = merger::perform_merge(test_dir, part_files, rel_output);
+    assert(rel_res.status == merger::MergeStatus::SUCCESS);
+    assert(merger::file_exists(rel_output));
+    assert(!merger::file_exists(merger::get_temporary_merge_path(rel_output)));
+    std::remove(rel_output.c_str());
+
     // Cleanup
     std::remove(part1_path.c_str());
     std::remove(part2_path.c_str());
@@ -214,6 +223,7 @@ void test_phase2_output_and_merge() {
 
     std::cout << "[PASS] test_phase2_output_and_merge\n";
 }
+
 
 
 
