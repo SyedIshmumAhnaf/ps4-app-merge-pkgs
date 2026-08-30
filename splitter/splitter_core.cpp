@@ -91,7 +91,7 @@ std::vector<std::string> find_existing_part_files(const std::string& output_dir,
             fname.compare(fname.size() - suffix.size(), suffix.size(), suffix) == 0) {
             
             std::string part_digits = fname.substr(prefix.size(), fname.size() - prefix.size() - suffix.size());
-            bool all_digits = !part_digits.empty();
+            bool all_digits = (part_digits.size() >= 3);
             for (char c : part_digits) {
                 if (!std::isdigit(static_cast<unsigned char>(c))) {
                     all_digits = false;

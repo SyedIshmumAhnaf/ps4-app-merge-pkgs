@@ -406,6 +406,64 @@ void test_splitter_obsolete_cleanup_error_propagation() {
     std::cout << "[PASS] test_splitter_obsolete_cleanup_error_propagation (Fix [P2] verified: deletion error propagated)\n";
 }
 
+void test_splitter_minimum_three_digits_suffix_filter() {
+    std::string test_dir = "/tmp/pkg_splitter_test_three_digits";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string short_1 = test_dir + "/Game_1.pkgpart";
+    std::string short_2 = test_dir + "/Game_01.pkgpart";
+    std::string valid_1 = test_dir + "/Game_001.pkgpart";
+    std::string valid_2 = test_dir + "/Game_002.pkgpart";
+
+    {
+        std::ofstream(short_1, std::ios::binary).write("SHORT_1", 7);
+        std::ofstream(short_2, std::ios::binary).write("SHORT_2", 7);
+        std::ofstream(valid_1, std::ios::binary).write("VALID_1", 7);
+        std::ofstream(valid_2, std::ios::binary).write("VALID_2", 7);
+    }
+
+    // Verify find_existing_part_files ignores < 3 digits suffix
+    auto matched = splitter::find_existing_part_files(test_dir, "Game");
+    assert(matched.size() == 2);
+    assert(matched[0] == valid_1);
+    assert(matched[1] == valid_2);
+
+    // Clean up valid files and verify short files do NOT trigger false conflict
+    std::remove(valid_1.c_str());
+    std::remove(valid_2.c_str());
+
+    std::string input_path = test_dir + "/Game.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(100, 'M');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = false; // Normal split without force
+
+    auto res_normal = splitter::split_file(input_path, options);
+    // Should succeed without false conflict from Game_1.pkgpart or Game_01.pkgpart
+    assert(res_normal.status == splitter::SplitStatus::SUCCESS);
+
+    // Split with force enabled: verify Game_1 and Game_01 are NOT deleted as obsolete
+    options.force_overwrite = true;
+    auto res_force = splitter::split_file(input_path, options);
+    assert(res_force.status == splitter::SplitStatus::SUCCESS);
+    assert(splitter::file_exists(short_1));
+    assert(splitter::file_exists(short_2));
+
+    std::remove(short_1.c_str());
+    std::remove(short_2.c_str());
+    std::remove(valid_1.c_str());
+    std::remove(input_path.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_splitter_minimum_three_digits_suffix_filter (Fix [P2] verified: <3 digits not matched)\n";
+}
+
 int main() {
     test_splitter_path_utilities();
     test_splitter_exact_boundary();
@@ -416,6 +474,7 @@ int main() {
     test_splitter_default_output_location();
     test_splitter_distinct_package_prefix_preservation();
     test_splitter_obsolete_cleanup_error_propagation();
+    test_splitter_minimum_three_digits_suffix_filter();
     std::cout << "All Splitter Core tests passed successfully!\n";
     return 0;
 }
