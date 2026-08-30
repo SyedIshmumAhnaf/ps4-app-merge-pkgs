@@ -25,6 +25,7 @@
 #include "common/log.h"
 #include "common/graphics.cpp"
 #include "controller.h"
+#include "merger_core.hpp"
 
 std::stringstream debugLogStream;
 
@@ -254,24 +255,30 @@ int main(void)
         for(;;);
     }
 
-    userTextStream << "Welcome! PKG merger by hloth.dev\nSearching in /data/pkg_merger...\n";
-    std::vector<std::string> files = list_files("/data/pkg_merger");
-    userTextStream << "Found " << files.size() << " files:\n";
+    userTextStream << "Welcome! PKG merger (hardened)\nSearching in /data/pkg_merger...\n";
+    std::vector<std::string> raw_files = list_files("/data/pkg_merger");
+    merger::ValidationResult validation = merger::validate_and_prepare_parts(raw_files);
 
-    std::sort(files.begin(), files.end(), compareFilesBySuffix);
-
-    for (const auto &file : files)
-    {
-        if (file.size() > 8 && file.substr(file.size() - 8) == ".pkgpart")
-        {
-            userTextStream << file << "\n";
-        }
-    }
-
+    std::vector<std::string> files = validation.sorted_files;
     auto controller = new Controller();
     bool listen = false;
-    if (files.size() > 1)
+
+    if (validation.status != merger::ValidationStatus::OK)
     {
+        userTextStream << "\n[ERROR] " << validation.error_message << "\n";
+        if (validation.status == merger::ValidationStatus::EMPTY_INPUT)
+        {
+            userTextStream << "You must split your pkgs on PC and move them from /mnt/usb0 to /data/pkg_merger using FTP\n";
+        }
+    }
+    else
+    {
+        userTextStream << "Found " << files.size() << " valid parts for '" << validation.single_base_name << "':\n";
+        for (const auto &file : files)
+        {
+            userTextStream << " - " << file << "\n";
+        }
+
         std::uint64_t totalSize = 0;
         for (const auto &file : files)
         {
@@ -292,10 +299,6 @@ int main(void)
         }
 
         listen = true;
-    }
-    else
-    {
-        userTextStream << "You must split your pkgs on PC and move them from /mnt/usb0 to /data/pkg_merger using FTP\n";
     }
     
     for (;;)
