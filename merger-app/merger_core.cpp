@@ -3,6 +3,11 @@
 #include <sstream>
 #include <cctype>
 #include <set>
+#include <fstream>
+#include <cstdio>
+#include <sys/stat.h>
+#include <sys/statvfs.h>
+
 
 namespace merger {
 
@@ -147,4 +152,138 @@ ValidationResult validate_and_prepare_parts(const std::vector<std::string>& file
     return result;
 }
 
+bool file_exists(const std::string& path) {
+    struct stat st;
+    return (stat(path.c_str(), &st) == 0);
+}
+
+bool get_available_space(const std::string& target_path, uint64_t& out_free_bytes) {
+    struct statvfs stat;
+    // If target_path doesn't exist yet, inspect its parent directory
+    std::string check_path = target_path;
+    if (!file_exists(check_path)) {
+        size_t last_slash = check_path.find_last_of('/');
+        if (last_slash != std::string::npos) {
+            check_path = (last_slash == 0) ? "/" : check_path.substr(0, last_slash);
+        } else {
+            check_path = ".";
+        }
+    }
+
+    if (statvfs(check_path.c_str(), &stat) != 0) {
+        return false;
+    }
+
+    out_free_bytes = static_cast<uint64_t>(stat.f_bavail) * static_cast<uint64_t>(stat.f_frsize);
+    return true;
+}
+
+uint64_t calculate_total_parts_size(const std::string& input_dir, const std::vector<std::string>& files) {
+    uint64_t total = 0;
+    for (const auto& file : files) {
+        std::string full_path = input_dir;
+        if (!full_path.empty() && full_path.back() != '/') {
+            full_path += '/';
+        }
+        full_path += file;
+
+        struct stat st;
+        if (stat(full_path.c_str(), &st) == 0) {
+            total += static_cast<uint64_t>(st.st_size);
+        }
+    }
+    return total;
+}
+
+MergeResult perform_merge(
+    const std::string& input_dir,
+    const std::vector<std::string>& files,
+    const std::string& output_path,
+    void (*progress_callback)(uint64_t, uint64_t)
+) {
+    MergeResult result;
+    result.status = MergeStatus::SUCCESS;
+    result.bytes_written = 0;
+
+    uint64_t total_expected_bytes = calculate_total_parts_size(input_dir, files);
+
+    std::ofstream output_file(output_path, std::ios::binary);
+    if (!output_file.is_open()) {
+        result.status = MergeStatus::OUTPUT_OPEN_ERROR;
+        result.error_message = "Failed to open output file for writing: " + output_path;
+        return result;
+    }
+
+    const size_t BUFFER_SIZE = 1024 * 1024; // 1 MB buffer
+    std::vector<char> buffer(BUFFER_SIZE);
+
+    for (const auto& file : files) {
+        std::string full_path = input_dir;
+        if (!full_path.empty() && full_path.back() != '/') {
+            full_path += '/';
+        }
+        full_path += file;
+
+        std::ifstream input_file(full_path, std::ios::binary);
+        if (!input_file.is_open()) {
+            output_file.close();
+            std::remove(output_path.c_str());
+            result.status = MergeStatus::INPUT_OPEN_ERROR;
+            result.error_message = "Failed to open input part: " + full_path;
+            return result;
+        }
+
+        while (input_file.read(buffer.data(), buffer.size()) || input_file.gcount() > 0) {
+            std::streamsize bytes_read = input_file.gcount();
+            if (bytes_read <= 0) break;
+
+            output_file.write(buffer.data(), bytes_read);
+            if (!output_file.good()) {
+                input_file.close();
+                output_file.close();
+                std::remove(output_path.c_str());
+                result.status = MergeStatus::WRITE_ERROR;
+                result.error_message = "Write error occurred while merging " + file + " (likely disk full or I/O error).";
+                return result;
+            }
+
+            result.bytes_written += static_cast<uint64_t>(bytes_read);
+            if (progress_callback) {
+                progress_callback(result.bytes_written, total_expected_bytes);
+            }
+        }
+
+        if (input_file.bad()) {
+            input_file.close();
+            output_file.close();
+            std::remove(output_path.c_str());
+            result.status = MergeStatus::READ_ERROR;
+            result.error_message = "Read error occurred while reading " + full_path;
+            return result;
+        }
+
+        input_file.close();
+    }
+
+    output_file.flush();
+    if (!output_file.good()) {
+        output_file.close();
+        std::remove(output_path.c_str());
+        result.status = MergeStatus::WRITE_ERROR;
+        result.error_message = "Failed to flush output stream to " + output_path;
+        return result;
+    }
+
+    output_file.close();
+    if (output_file.fail()) {
+        std::remove(output_path.c_str());
+        result.status = MergeStatus::WRITE_ERROR;
+        result.error_message = "Failed to cleanly close output file: " + output_path;
+        return result;
+    }
+
+    return result;
+}
+
 } // namespace merger
+

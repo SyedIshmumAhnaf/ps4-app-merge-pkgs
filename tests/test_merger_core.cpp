@@ -3,6 +3,10 @@
 #include <cassert>
 #include <vector>
 #include <string>
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
+
 
 void test_filename_parser() {
     merger::PkgPartInfo info;
@@ -93,11 +97,99 @@ void test_missing_and_duplicate_parts() {
     std::cout << "[PASS] test_missing_and_duplicate_parts\n";
 }
 
+void test_phase2_output_and_merge() {
+    // Create temporary directory for testing
+    std::string test_dir = "/tmp/pkg_merger_test";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string part1_path = test_dir + "/TestGame_001.pkgpart";
+    std::string part2_path = test_dir + "/TestGame_002.pkgpart";
+    std::string part3_path = test_dir + "/TestGame_003.pkgpart";
+    std::string output_path = test_dir + "/TestGame.pkg";
+
+    // Clean up potential leftovers
+    std::remove(part1_path.c_str());
+    std::remove(part2_path.c_str());
+    std::remove(part3_path.c_str());
+    std::remove(output_path.c_str());
+
+    // Write mock data to part files
+    {
+        std::ofstream p1(part1_path, std::ios::binary);
+        p1.write("CHUNK1_DATA_", 12);
+        std::ofstream p2(part2_path, std::ios::binary);
+        p2.write("CHUNK2_DATA_", 12);
+        std::ofstream p3(part3_path, std::ios::binary);
+        p3.write("CHUNK3_DATA!", 12);
+    }
+
+    std::vector<std::string> part_files = {
+        "TestGame_001.pkgpart",
+        "TestGame_002.pkgpart",
+        "TestGame_003.pkgpart"
+    };
+
+    // Test file_exists
+    assert(merger::file_exists(part1_path));
+    assert(!merger::file_exists(output_path));
+
+    // Test calculate_total_parts_size
+    uint64_t total_size = merger::calculate_total_parts_size(test_dir, part_files);
+    assert(total_size == 36);
+
+    // Test get_available_space
+    uint64_t free_bytes = 0;
+    assert(merger::get_available_space(test_dir, free_bytes));
+    assert(free_bytes > 0);
+
+    // Test perform_merge happy path
+    uint64_t progress_last_processed = 0;
+    auto progress_cb = [](uint64_t processed, uint64_t total) {
+        assert(total == 36);
+        assert(processed <= total);
+    };
+
+    auto res = merger::perform_merge(test_dir, part_files, output_path, progress_cb);
+    (void)progress_last_processed;
+    assert(res.status == merger::MergeStatus::SUCCESS);
+
+    assert(res.bytes_written == 36);
+    assert(merger::file_exists(output_path));
+
+    // Verify content
+    {
+        std::ifstream merged(output_path, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(merged)), std::istreambuf_iterator<char>());
+        assert(content == "CHUNK1_DATA_CHUNK2_DATA_CHUNK3_DATA!");
+    }
+
+    // Test missing input part handling and cleanup
+    std::vector<std::string> broken_parts = {
+        "TestGame_001.pkgpart",
+        "TestGame_NonExistent_002.pkgpart"
+    };
+    std::string broken_output = test_dir + "/Broken.pkg";
+    auto fail_res = merger::perform_merge(test_dir, broken_parts, broken_output);
+    assert(fail_res.status == merger::MergeStatus::INPUT_OPEN_ERROR);
+    assert(!merger::file_exists(broken_output)); // partial file cleaned up!
+
+    // Cleanup
+    std::remove(part1_path.c_str());
+    std::remove(part2_path.c_str());
+    std::remove(part3_path.c_str());
+    std::remove(output_path.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_phase2_output_and_merge\n";
+}
+
 int main() {
     test_filename_parser();
     test_filtering_and_sorting();
     test_multi_game_rejection();
     test_missing_and_duplicate_parts();
-    std::cout << "All Phase 1 unit tests passed successfully!\n";
+    test_phase2_output_and_merge();
+    std::cout << "All Phase 1 & Phase 2 unit tests passed successfully!\n";
     return 0;
 }
+

@@ -182,38 +182,23 @@ std::string formatTime(std::uint64_t seconds)
 
 void merge_files(const std::vector<std::string>& files, const std::string& output_path)
 {
-    std::ofstream outputFile(output_path, std::ios::binary);
+    userTextStream << "\nMerging in progress... Please wait.\n";
+    merger::MergeResult res = merger::perform_merge("/data/pkg_merger", files, output_path);
 
-    if (!outputFile.is_open())
+    if (res.status == merger::MergeStatus::SUCCESS)
     {
-        userTextStream << "Failed to open output file for writing\n";
-        return;
+        userTextStream << "\n[SUCCESS] Files successfully merged into " << output_path << "\n"
+                       << "Total bytes written: " << res.bytes_written << "\n"
+                       << "Now you can install it via goldhen's installer!\n"
+                       << "Now you can also delete .pkgpart files from /data/pkg_merger\n"
+                       << "Close and reopen this app to start again\n";
     }
-
-    std::uint64_t processedSize = 0;
-
-    for (const auto& file : files)
+    else
     {
-        std::string fullPath = "/data/pkg_merger/" + file;
-
-        std::ifstream inputFile(fullPath, std::ios::binary);
-        if (!inputFile.is_open())
-        {
-            userTextStream << "Failed to open input file: " << fullPath << "\n";
-            continue;
-        }
-
-        char buffer[1024 * 1024]; // 1 MB
-        while (inputFile.read(buffer, sizeof(buffer)))
-        {
-            outputFile.write(buffer, inputFile.gcount());
-        }
-        outputFile.write(buffer, inputFile.gcount());
-        inputFile.close();
+        userTextStream << "\n[FAILED] Merge failed: " << res.error_message << "\n"
+                       << "Any incomplete output file has been removed to prevent corruption.\n"
+                       << "Please verify disk space and input integrity before retrying.\n";
     }
-
-    outputFile.close();
-    userTextStream << "Files successfully merged into " << output_path << "\nNow you can install it via goldhen's installer!\nNow you can also delete .pkgpart files from /data/pkg_merger\nClose and reopen this app to start again\n";
 }
 
 
@@ -279,26 +264,48 @@ int main(void)
             userTextStream << " - " << file << "\n";
         }
 
-        std::uint64_t totalSize = 0;
-        for (const auto &file : files)
-        {
-            std::string fullPath = "/data/pkg_merger/" + file;
-            totalSize += get_file_size(fullPath);
-        }
+        std::uint64_t totalSize = merger::calculate_total_parts_size("/data/pkg_merger", files);
         const std::uint64_t speed = 27 * 1024 * 1024; // 27 MB/s on average
-        std::uint64_t estimatedTimeInSeconds = totalSize / speed;
+        std::uint64_t estimatedTimeInSeconds = (speed > 0) ? (totalSize / speed) : 0;
 
-        userTextStream << "\nEstimated time: " << formatTime(estimatedTimeInSeconds) << "\n";
-        userTextStream << "App will be frozen entire time, do not worry and look\nif .pkg file started appearing in /data/pkg directory via FTP\nAllow up to 3x of that estimated time\n";
+        userTextStream << "\nTotal size: " << (totalSize / (1024 * 1024)) << " MB\n";
+        userTextStream << "Estimated time: " << formatTime(estimatedTimeInSeconds) << "\n";
 
-        userTextStream << "\nPress any button on controller to START merging parts\n\n";
-        if (!controller->Init(-1))
+        // Pre-flight free-space check (Fix #7)
+        uint64_t available_space = 0;
+        if (merger::get_available_space("/data/pkg", available_space))
         {
-            userTextStream << "Couldn't initialize controller\n";
-            for (;;);
+            userTextStream << "Available space on /data/pkg: " << (available_space / (1024 * 1024)) << " MB\n";
+            if (available_space < totalSize)
+            {
+                userTextStream << "\n[ERROR] Insufficient disk space! Required: "
+                               << (totalSize / (1024 * 1024)) << " MB, Available: "
+                               << (available_space / (1024 * 1024)) << " MB.\n"
+                               << "Please free up disk space on PS4 internal storage before merging.\n";
+            }
+            else
+            {
+                userTextStream << "App will be frozen entire time, do not worry and look\nif .pkg file started appearing in /data/pkg directory via FTP\nAllow up to 3x of that estimated time\n";
+                userTextStream << "\nPress any button on controller to START merging parts\n\n";
+                if (!controller->Init(-1))
+                {
+                    userTextStream << "Couldn't initialize controller\n";
+                    for (;;);
+                }
+                listen = true;
+            }
         }
-
-        listen = true;
+        else
+        {
+            userTextStream << "\n[WARNING] Could not check free space on /data/pkg. Proceed with caution.\n";
+            userTextStream << "\nPress any button on controller to START merging parts\n\n";
+            if (!controller->Init(-1))
+            {
+                userTextStream << "Couldn't initialize controller\n";
+                for (;;);
+            }
+            listen = true;
+        }
     }
     
     for (;;)
@@ -334,10 +341,22 @@ int main(void)
             )
             {
                 listen = false;
+                std::string baseFileName = validation.single_base_name;
+                std::string outputPath = "/data/pkg/" + baseFileName + ".pkg";
+
+                // Overwrite confirmation check (Fix #5)
+                if (merger::file_exists(outputPath))
+                {
+                    if (!show_dialog(MDIALOG_YESNO, "Output file %s already exists!\nDo you want to overwrite it?", outputPath.c_str()))
+                    {
+                        userTextStream << "\nMerge cancelled by user (overwrite declined).\n";
+                        listen = true;
+                        continue;
+                    }
+                }
+
                 if (show_dialog(MDIALOG_OK, "App will not report any progress and will be frozen until merging is done, do not worry about it. Press OK to start merging or exit app now"))
                 {
-                    std::string baseFileName = get_base_filename(files.front());
-                    std::string outputPath = "/data/pkg/" + baseFileName + ".pkg";
                     merge_files(files, outputPath);
                 } else {
                     listen = true;
