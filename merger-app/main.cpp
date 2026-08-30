@@ -193,6 +193,15 @@ void merge_files(const std::vector<std::string>& files, const std::string& outpu
                        << "Now you can also delete .pkgpart files from /data/pkg_merger\n"
                        << "Close and reopen this app to start again\n";
     }
+    else if (res.status == merger::MergeStatus::POST_RENAME_SYNC_ERROR)
+    {
+        // [P2] Distinguish post-rename directory sync failure: output file is complete and committed at output_path.
+        userTextStream << "\n[WARNING] Merge completed and committed to " << output_path << "\n"
+                       << "Total bytes written: " << res.bytes_written << "\n"
+                       << "Warning detail: " << res.error_message << "\n"
+                       << "The file is installed at destination, but directory metadata could not be explicitly synced.\n"
+                       << "You may install it via goldhen's installer, but consider rebooting cleanly to flush filesystem caches.\n";
+    }
     else
     {
         userTextStream << "\n[FAILED] Merge failed: " << res.error_message << "\n"
@@ -200,6 +209,7 @@ void merge_files(const std::vector<std::string>& files, const std::string& outpu
                        << "Please verify disk space and input integrity before retrying.\n";
     }
 }
+
 
 
 int main(void)

@@ -9,6 +9,7 @@
 #include <sys/statvfs.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <cerrno>
 
 
 
@@ -166,10 +167,13 @@ std::string get_temporary_merge_path(const std::string& output_path) {
 
 bool clean_stale_temp_file(const std::string& output_path) {
     std::string temp_path = get_temporary_merge_path(output_path);
-    if (file_exists(temp_path)) {
-        return (std::remove(temp_path.c_str()) == 0);
+    if (std::remove(temp_path.c_str()) != 0) {
+        if (errno == ENOENT) {
+            return true; // File did not exist, clean state
+        }
+        return false; // Permission, I/O, or lookup failure (e.g. EACCES, EIO)
     }
-    return true;
+    return true; // Successfully unlinked
 }
 
 bool compute_required_space(uint64_t total_parts_size, uint64_t multiplier, uint64_t& out_required_bytes) {
@@ -344,6 +348,7 @@ MergeResult perform_merge(
 
     // [P1/P2] Sync parent directory so directory entry update (rename) is persisted durably.
     // Handles relative outputs (e.g. "Game.pkg" -> parent is ".") as well as absolute paths.
+    // Distinguish post-rename directory sync errors as POST_RENAME_SYNC_ERROR since output is already committed.
     std::string dir_path = output_path;
     size_t last_slash = dir_path.find_last_of('/');
     if (last_slash != std::string::npos) {
@@ -354,15 +359,15 @@ MergeResult perform_merge(
 
     int dir_fd = open(dir_path.c_str(), O_RDONLY);
     if (dir_fd < 0) {
-        result.status = MergeStatus::WRITE_ERROR;
-        result.error_message = "Failed to open parent directory for durable synchronization: " + dir_path;
+        result.status = MergeStatus::POST_RENAME_SYNC_ERROR;
+        result.error_message = "Output file was written and moved to " + output_path + ", but opening parent directory for durable synchronization failed: " + dir_path;
         return result;
     }
 
     if (fsync(dir_fd) != 0) {
         close(dir_fd);
-        result.status = MergeStatus::WRITE_ERROR;
-        result.error_message = "Failed to sync parent directory to durable storage: " + dir_path;
+        result.status = MergeStatus::POST_RENAME_SYNC_ERROR;
+        result.error_message = "Output file was written and moved to " + output_path + ", but syncing parent directory to durable storage failed: " + dir_path;
         return result;
     }
     close(dir_fd);
@@ -371,6 +376,7 @@ MergeResult perform_merge(
 }
 
 } // namespace merger
+
 
 
 

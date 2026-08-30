@@ -76,8 +76,10 @@ enum class MergeStatus {
     OUTPUT_OPEN_ERROR,
     WRITE_ERROR,
     READ_ERROR,
-    INSUFFICIENT_SPACE
+    INSUFFICIENT_SPACE,
+    POST_RENAME_SYNC_ERROR
 };
+
 
 struct MergeResult {
     MergeStatus status;

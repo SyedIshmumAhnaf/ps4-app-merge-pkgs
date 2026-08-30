@@ -154,6 +154,8 @@ void test_phase2_output_and_merge() {
     assert(merger::file_exists(stale_temp_file));
     assert(merger::clean_stale_temp_file(output_path));
     assert(!merger::file_exists(stale_temp_file)); // Stale temp cleaned up prior to space check
+    assert(merger::clean_stale_temp_file(output_path)); // Calling on non-existent file cleanly returns true (ENOENT)
+
 
     // Test get_available_space
     uint64_t free_bytes = 0;
