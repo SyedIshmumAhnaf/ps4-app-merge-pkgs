@@ -1,0 +1,507 @@
+#include "../merger-app/merger_core.hpp"
+#include "../splitter/splitter_core.hpp"
+#include <iostream>
+#include <cassert>
+#include <vector>
+#include <string>
+#include <fstream>
+#include <sys/stat.h>
+#include <unistd.h>
+
+// -------------------------------------------------------------
+// Merger Unit Tests (Phase 1 & 2)
+// -------------------------------------------------------------
+
+void test_merger_filename_parser() {
+    merger::PkgPartInfo info;
+
+    // Valid cases
+    assert(merger::parse_pkgpart_filename("Game_001.pkgpart", info));
+    assert(info.base_name == "Game");
+    assert(info.part_index == 1);
+
+    assert(merger::parse_pkgpart_filename("Title_Update_v1.02_042.pkgpart", info));
+    assert(info.base_name == "Title_Update_v1.02");
+    assert(info.part_index == 42);
+
+    // Invalid cases (defensive tests against crash bugs)
+    assert(!merger::parse_pkgpart_filename("short.pkg", info));
+    assert(!merger::parse_pkgpart_filename(".pkgpart", info));
+    assert(!merger::parse_pkgpart_filename("abc.pkgpart", info));
+    assert(!merger::parse_pkgpart_filename("_001.pkgpart", info));
+    assert(!merger::parse_pkgpart_filename("Game_000.pkgpart", info)); // 0-indexed part is invalid
+    assert(!merger::parse_pkgpart_filename("Game_abc.pkgpart", info));
+    assert(!merger::parse_pkgpart_filename("Game_01.pkgpart", info)); // < 3 digits
+    std::cout << "[PASS] test_merger_filename_parser\n";
+}
+
+void test_merger_filtering_and_sorting() {
+    std::vector<std::string> raw_files = {
+        "readme.txt",
+        "Game_003.pkgpart",
+        ".DS_Store",
+        "Game_001.pkgpart",
+        "Game_002.pkgpart",
+        "other_file.bin"
+    };
+
+    auto filtered = merger::filter_pkgpart_files(raw_files);
+    assert(filtered.size() == 3);
+
+    auto result = merger::validate_and_prepare_parts(raw_files);
+    assert(result.status == merger::ValidationStatus::OK);
+    assert(result.single_base_name == "Game");
+    assert(result.sorted_files.size() == 3);
+    assert(result.sorted_files[0] == "Game_001.pkgpart");
+    assert(result.sorted_files[1] == "Game_002.pkgpart");
+    assert(result.sorted_files[2] == "Game_003.pkgpart");
+    std::cout << "[PASS] test_merger_filtering_and_sorting\n";
+}
+
+void test_merger_multi_game_rejection() {
+    std::vector<std::string> mixed_files = {
+        "GameA_001.pkgpart",
+        "GameA_002.pkgpart",
+        "GameB_001.pkgpart"
+    };
+
+    auto result = merger::validate_and_prepare_parts(mixed_files);
+    assert(result.status == merger::ValidationStatus::MULTIPLE_BASE_NAMES);
+    assert(result.detected_base_names.size() == 2);
+    assert(!result.error_message.empty());
+    std::cout << "[PASS] test_merger_multi_game_rejection\n";
+}
+
+void test_merger_missing_and_duplicate_parts() {
+    // Missing part 2
+    std::vector<std::string> missing_parts = {
+        "Game_001.pkgpart",
+        "Game_003.pkgpart"
+    };
+    auto result_missing = merger::validate_and_prepare_parts(missing_parts);
+    assert(result_missing.status == merger::ValidationStatus::NON_CONTIGUOUS_PARTS);
+
+    // Duplicate part 1
+    std::vector<std::string> duplicate_parts = {
+        "Game_001.pkgpart",
+        "Game_001.pkgpart",
+        "Game_002.pkgpart"
+    };
+    auto result_dup = merger::validate_and_prepare_parts(duplicate_parts);
+    assert(result_dup.status == merger::ValidationStatus::DUPLICATE_PARTS);
+
+    // Starts at 2 instead of 1
+    std::vector<std::string> not_starting_at_one = {
+        "Game_002.pkgpart",
+        "Game_003.pkgpart"
+    };
+    auto result_not_one = merger::validate_and_prepare_parts(not_starting_at_one);
+    assert(result_not_one.status == merger::ValidationStatus::NON_CONTIGUOUS_PARTS);
+
+    std::cout << "[PASS] test_merger_missing_and_duplicate_parts\n";
+}
+
+void test_merger_phase2_output_and_merge() {
+    std::string test_dir = "/tmp/pkg_merger_test";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string part1_path = test_dir + "/TestGame_001.pkgpart";
+    std::string part2_path = test_dir + "/TestGame_002.pkgpart";
+    std::string part3_path = test_dir + "/TestGame_003.pkgpart";
+    std::string output_path = test_dir + "/TestGame.pkg";
+
+    std::remove(part1_path.c_str());
+    std::remove(part2_path.c_str());
+    std::remove(part3_path.c_str());
+    std::remove(output_path.c_str());
+
+    {
+        std::ofstream p1(part1_path, std::ios::binary);
+        p1.write("CHUNK1_DATA_", 12);
+        std::ofstream p2(part2_path, std::ios::binary);
+        p2.write("CHUNK2_DATA_", 12);
+        std::ofstream p3(part3_path, std::ios::binary);
+        p3.write("CHUNK3_DATA!", 12);
+    }
+
+    std::vector<std::string> part_files = {
+        "TestGame_001.pkgpart",
+        "TestGame_002.pkgpart",
+        "TestGame_003.pkgpart"
+    };
+
+    assert(merger::file_exists(part1_path));
+    assert(!merger::file_exists(output_path));
+
+    uint64_t total_size = merger::calculate_total_parts_size(test_dir, part_files);
+    assert(total_size == 36);
+
+    uint64_t req_space = 0;
+    assert(merger::compute_required_space(total_size, merger::FREE_SPACE_MULTIPLIER, req_space));
+    assert(req_space == 72);
+
+    uint64_t overflow_out = 0;
+    assert(!merger::compute_required_space(UINT64_MAX / 2 + 1, 2, overflow_out));
+
+    std::string stale_temp_file = merger::get_temporary_merge_path(output_path);
+    {
+        std::ofstream st(stale_temp_file, std::ios::binary);
+        st.write("STALE_DATA_FROM_CRASH", 21);
+    }
+    assert(merger::file_exists(stale_temp_file));
+    assert(merger::clean_stale_temp_file(output_path));
+    assert(!merger::file_exists(stale_temp_file));
+    assert(merger::clean_stale_temp_file(output_path));
+
+    uint64_t free_bytes = 0;
+    assert(merger::get_available_space(test_dir, free_bytes));
+    assert(free_bytes > 0);
+
+    auto progress_cb = [](uint64_t processed, uint64_t total) {
+        assert(total == 36);
+        assert(processed <= total);
+    };
+
+    auto res = merger::perform_merge(test_dir, part_files, output_path, progress_cb);
+    assert(res.status == merger::MergeStatus::SUCCESS);
+    assert(res.bytes_written == 36);
+    assert(merger::file_exists(output_path));
+    assert(!merger::file_exists(merger::get_temporary_merge_path(output_path)));
+
+    {
+        std::ifstream merged(output_path, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(merged)), std::istreambuf_iterator<char>());
+        assert(content == "CHUNK1_DATA_CHUNK2_DATA_CHUNK3_DATA!");
+    }
+
+    {
+        std::ofstream existing(output_path, std::ios::binary);
+        existing.write("PREVIOUS_EXISTING_PKG", 21);
+    }
+
+    std::vector<std::string> broken_parts = {
+        "TestGame_001.pkgpart",
+        "TestGame_NonExistent_002.pkgpart"
+    };
+    auto fail_res = merger::perform_merge(test_dir, broken_parts, output_path);
+    assert(fail_res.status == merger::MergeStatus::INPUT_OPEN_ERROR);
+    assert(!merger::file_exists(merger::get_temporary_merge_path(output_path)));
+
+    {
+        std::ifstream untouched(output_path, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(untouched)), std::istreambuf_iterator<char>());
+        assert(content == "PREVIOUS_EXISTING_PKG");
+    }
+
+    std::string rel_output = "RelGame.pkg";
+    std::remove(rel_output.c_str());
+    auto rel_res = merger::perform_merge(test_dir, part_files, rel_output);
+    assert(rel_res.status == merger::MergeStatus::SUCCESS);
+    assert(merger::file_exists(rel_output));
+    assert(!merger::file_exists(merger::get_temporary_merge_path(rel_output)));
+    std::remove(rel_output.c_str());
+
+    std::remove(part1_path.c_str());
+    std::remove(part2_path.c_str());
+    std::remove(part3_path.c_str());
+    std::remove(output_path.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_merger_phase2_output_and_merge\n";
+}
+
+// -------------------------------------------------------------
+// Splitter Unit Tests (Phase 3)
+// -------------------------------------------------------------
+
+static void cleanup_test_dir(const std::string& dir) {
+    std::string p1 = dir + "/TestGame_001.pkgpart";
+    std::string p2 = dir + "/TestGame_002.pkgpart";
+    std::string p3 = dir + "/TestGame_003.pkgpart";
+    std::string p4 = dir + "/TestGame_004.pkgpart";
+    std::string src = dir + "/TestGame.pkg";
+    std::string empty = dir + "/Empty.pkg";
+
+    std::remove(p1.c_str());
+    std::remove(p2.c_str());
+    std::remove(p3.c_str());
+    std::remove(p4.c_str());
+    std::remove(src.c_str());
+    std::remove(empty.c_str());
+    rmdir(dir.c_str());
+}
+
+void test_splitter_path_utilities() {
+    assert(splitter::extract_base_name("Game.pkg") == "Game");
+    assert(splitter::extract_base_name("/path/to/MyGame.v1.0.pkg") == "MyGame.v1.0");
+    assert(splitter::extract_base_name("C:\\Games\\FinalFantasy.pkg") == "FinalFantasy");
+    assert(splitter::extract_base_name("NoExtension") == "NoExtension");
+    assert(splitter::extract_base_name(".hidden") == ".hidden");
+
+    assert(splitter::extract_directory("/path/to/Game.pkg") == "/path/to/");
+    assert(splitter::extract_directory("Game.pkg") == "");
+    assert(splitter::extract_directory("C:\\Games\\Game.pkg") == "C:\\Games\\");
+
+    assert(splitter::get_chunk_file_name("Game", 1) == "Game_001.pkgpart");
+    assert(splitter::get_chunk_file_name("Game", 42) == "Game_042.pkgpart");
+    assert(splitter::get_chunk_file_name("Game", 1000) == "Game_1000.pkgpart");
+
+    assert(splitter::get_chunk_file_path("/tmp/out", "Game", 1) == "/tmp/out/Game_001.pkgpart");
+    assert(splitter::get_chunk_file_path("/tmp/out/", "Game", 1) == "/tmp/out/Game_001.pkgpart");
+    assert(splitter::get_chunk_file_path("", "Game", 1) == "Game_001.pkgpart");
+
+    uint64_t bytes = 0;
+    assert(splitter::mb_to_bytes(15000, bytes));
+    assert(bytes == 15000000000ULL);
+    assert(!splitter::mb_to_bytes(UINT64_MAX / 500000, bytes));
+
+    std::cout << "[PASS] test_splitter_path_utilities\n";
+}
+
+void test_splitter_exact_boundary() {
+    std::string test_dir = "/tmp/pkg_splitter_test_boundary";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string input_path = test_dir + "/TestGame.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(200, 'A');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = true;
+
+    auto result = splitter::split_file(input_path, options);
+    assert(result.status == splitter::SplitStatus::SUCCESS);
+    assert(result.parts_count == 2);
+    assert(result.total_bytes_read == 200);
+    assert(result.generated_parts.size() == 2);
+
+    std::string p1 = test_dir + "/TestGame_001.pkgpart";
+    std::string p2 = test_dir + "/TestGame_002.pkgpart";
+    std::string p3 = test_dir + "/TestGame_003.pkgpart";
+
+    assert(splitter::file_exists(p1));
+    assert(splitter::file_exists(p2));
+    assert(!splitter::file_exists(p3)); // FIX #8 verified
+
+    struct stat st1, st2;
+    stat(p1.c_str(), &st1);
+    stat(p2.c_str(), &st2);
+    assert(st1.st_size == 100);
+    assert(st2.st_size == 100);
+
+    cleanup_test_dir(test_dir);
+    std::cout << "[PASS] test_splitter_exact_boundary (Fix #8 verified: no trailing empty part)\n";
+}
+
+void test_splitter_non_boundary() {
+    std::string test_dir = "/tmp/pkg_splitter_test_nonboundary";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string input_path = test_dir + "/TestGame.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(250, 'B');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = true;
+
+    auto result = splitter::split_file(input_path, options);
+    assert(result.status == splitter::SplitStatus::SUCCESS);
+    assert(result.parts_count == 3);
+    assert(result.total_bytes_read == 250);
+
+    std::string p1 = test_dir + "/TestGame_001.pkgpart";
+    std::string p2 = test_dir + "/TestGame_002.pkgpart";
+    std::string p3 = test_dir + "/TestGame_003.pkgpart";
+    std::string p4 = test_dir + "/TestGame_004.pkgpart";
+
+    assert(splitter::file_exists(p1));
+    assert(splitter::file_exists(p2));
+    assert(splitter::file_exists(p3));
+    assert(!splitter::file_exists(p4));
+
+    struct stat st1, st2, st3;
+    stat(p1.c_str(), &st1);
+    stat(p2.c_str(), &st2);
+    stat(p3.c_str(), &st3);
+    assert(st1.st_size == 100);
+    assert(st2.st_size == 100);
+    assert(st3.st_size == 50);
+
+    cleanup_test_dir(test_dir);
+    std::cout << "[PASS] test_splitter_non_boundary\n";
+}
+
+void test_splitter_zero_byte_and_invalid_args() {
+    std::string test_dir = "/tmp/pkg_splitter_test_zero";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string empty_path = test_dir + "/Empty.pkg";
+    {
+        std::ofstream src(empty_path, std::ios::binary);
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+
+    auto result_empty = splitter::split_file(empty_path, options);
+    assert(result_empty.status == splitter::SplitStatus::EMPTY_INPUT);
+    assert(result_empty.parts_count == 0);
+    assert(!splitter::file_exists(test_dir + "/Empty_001.pkgpart"));
+
+    options.chunk_size_bytes = 0;
+    auto result_zero_chunk = splitter::split_file(empty_path, options);
+    assert(result_zero_chunk.status == splitter::SplitStatus::INVALID_CHUNK_SIZE);
+
+    options.chunk_size_bytes = 100;
+    auto result_no_file = splitter::split_file(test_dir + "/NonExistent.pkg", options);
+    assert(result_no_file.status == splitter::SplitStatus::INPUT_OPEN_ERROR);
+
+    cleanup_test_dir(test_dir);
+    std::cout << "[PASS] test_splitter_zero_byte_and_invalid_args\n";
+}
+
+void test_splitter_overwrite_guard() {
+    std::string test_dir = "/tmp/pkg_splitter_test_overwrite";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string input_path = test_dir + "/TestGame.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(150, 'C');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    std::string pre_existing = test_dir + "/TestGame_001.pkgpart";
+    {
+        std::ofstream pre(pre_existing, std::ios::binary);
+        pre.write("OLD_DATA", 8);
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = false;
+
+    auto result_blocked = splitter::split_file(input_path, options);
+    assert(result_blocked.status == splitter::SplitStatus::OUTPUT_ALREADY_EXISTS);
+    assert(!result_blocked.existing_conflicts.empty());
+
+    {
+        std::ifstream check(pre_existing, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(check)), std::istreambuf_iterator<char>());
+        assert(content == "OLD_DATA");
+    }
+
+    options.force_overwrite = true;
+    auto result_forced = splitter::split_file(input_path, options);
+    assert(result_forced.status == splitter::SplitStatus::SUCCESS);
+    assert(result_forced.parts_count == 2);
+
+    struct stat st1;
+    stat(pre_existing.c_str(), &st1);
+    assert(st1.st_size == 100);
+
+    cleanup_test_dir(test_dir);
+    std::cout << "[PASS] test_splitter_overwrite_guard (Fix #9 verified)\n";
+}
+
+// -------------------------------------------------------------
+// End-to-End Split-and-Merge Integration Test
+// -------------------------------------------------------------
+
+void test_split_and_merge_roundtrip() {
+    std::string test_dir = "/tmp/pkg_roundtrip_test";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string original_pkg = test_dir + "/OriginalGame.pkg";
+    std::string reconstructed_pkg = test_dir + "/ReconstructedGame.pkg";
+
+    // Generate test data with arbitrary pattern (e.g. 550 bytes)
+    std::string original_data;
+    original_data.reserve(550);
+    for (int i = 0; i < 550; ++i) {
+        original_data.push_back(static_cast<char>('A' + (i % 26)));
+    }
+
+    {
+        std::ofstream orig(original_pkg, std::ios::binary);
+        orig.write(original_data.data(), original_data.size());
+    }
+
+    // Split into 120-byte chunks
+    splitter::SplitOptions split_opts;
+    split_opts.chunk_size_bytes = 120;
+    split_opts.output_dir = test_dir;
+    split_opts.force_overwrite = true;
+
+    auto split_res = splitter::split_file(original_pkg, split_opts);
+    assert(split_res.status == splitter::SplitStatus::SUCCESS);
+    assert(split_res.parts_count == 5); // 120*4 + 70 = 550
+
+    // Prepare list of part filenames for merger
+    std::vector<std::string> part_files = {
+        "OriginalGame_001.pkgpart",
+        "OriginalGame_002.pkgpart",
+        "OriginalGame_003.pkgpart",
+        "OriginalGame_004.pkgpart",
+        "OriginalGame_005.pkgpart"
+    };
+
+    auto merge_val = merger::validate_and_prepare_parts(part_files);
+    assert(merge_val.status == merger::ValidationStatus::OK);
+    assert(merge_val.sorted_files.size() == 5);
+
+    auto merge_res = merger::perform_merge(test_dir, merge_val.sorted_files, reconstructed_pkg);
+    assert(merge_res.status == merger::MergeStatus::SUCCESS);
+    assert(merge_res.bytes_written == 550);
+
+    // Verify reconstructed file matches original byte-for-byte
+    {
+        std::ifstream recon(reconstructed_pkg, std::ios::binary);
+        std::string reconstructed_data((std::istreambuf_iterator<char>(recon)), std::istreambuf_iterator<char>());
+        assert(reconstructed_data == original_data);
+    }
+
+    // Clean up
+    for (const auto& part : split_res.generated_parts) {
+        std::remove(part.c_str());
+    }
+    std::remove(original_pkg.c_str());
+    std::remove(reconstructed_pkg.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_split_and_merge_roundtrip (Desktop Split -> Merge verified byte-for-byte)\n";
+}
+
+int main() {
+    std::cout << "=== Running Merger Core Tests (Phase 1 & 2) ===\n";
+    test_merger_filename_parser();
+    test_merger_filtering_and_sorting();
+    test_merger_multi_game_rejection();
+    test_merger_missing_and_duplicate_parts();
+    test_merger_phase2_output_and_merge();
+
+    std::cout << "\n=== Running Splitter Core Tests (Phase 3) ===\n";
+    test_splitter_path_utilities();
+    test_splitter_exact_boundary();
+    test_splitter_non_boundary();
+    test_splitter_zero_byte_and_invalid_args();
+    test_splitter_overwrite_guard();
+
+    std::cout << "\n=== Running Split & Merge Integration Tests ===\n";
+    test_split_and_merge_roundtrip();
+
+    std::cout << "\n>>> ALL UNIT & INTEGRATION TESTS PASSED SUCCESSFULLY! <<<\n";
+    return 0;
+}
