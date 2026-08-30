@@ -124,9 +124,6 @@ SplitResult split_file(
     }
 
     std::string effective_output_dir = options.output_dir;
-    if (effective_output_dir.empty()) {
-        effective_output_dir = extract_directory(input_file_path);
-    }
 
     // Check for existing output part files if force_overwrite is false (Fix #9)
     if (!options.force_overwrite) {
@@ -241,15 +238,20 @@ SplitResult split_file(
         }
     }
 
-    // Check for bad input stream state (I/O error)
-    if (input_file.bad() || (total_bytes_read < total_file_size && !input_file.eof())) {
+    // Check for bad input stream state or premature EOF (Fix review: [P2])
+    if (input_file.bad() || total_bytes_read < total_file_size) {
         if (current_out.is_open()) {
             current_out.close();
         }
         cleanup_generated_parts(created_parts);
         input_file.close();
         result.status = SplitStatus::READ_ERROR;
-        result.error_message = "I/O error while reading input file: " + input_file_path;
+        if (input_file.bad()) {
+            result.error_message = "I/O error while reading input file: " + input_file_path;
+        } else {
+            result.error_message = "Premature end of file: read " + std::to_string(total_bytes_read) +
+                                   " bytes, expected " + std::to_string(total_file_size) + " bytes from: " + input_file_path;
+        }
         return result;
     }
 
@@ -271,6 +273,16 @@ SplitResult split_file(
             result.status = SplitStatus::WRITE_ERROR;
             result.error_message = "Failed to close final chunk: " + created_parts.back();
             return result;
+        }
+    }
+
+    // If overwrite was forced, clean up any obsolete higher-numbered or leftover parts from previous runs (Fix review: [P1])
+    if (options.force_overwrite) {
+        std::vector<std::string> current_matching = find_existing_part_files(effective_output_dir, base_name);
+        for (const auto& existing_file : current_matching) {
+            if (std::find(created_parts.begin(), created_parts.end(), existing_file) == created_parts.end()) {
+                std::remove(existing_file.c_str());
+            }
         }
     }
 

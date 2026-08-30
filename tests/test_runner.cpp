@@ -416,6 +416,91 @@ void test_splitter_overwrite_guard() {
     std::cout << "[PASS] test_splitter_overwrite_guard (Fix #9 verified)\n";
 }
 
+void test_splitter_obsolete_parts_cleanup_on_overwrite() {
+    std::string test_dir = "/tmp/pkg_splitter_test_obsolete";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string p1 = test_dir + "/TestGame_001.pkgpart";
+    std::string p2 = test_dir + "/TestGame_002.pkgpart";
+    std::string p3 = test_dir + "/TestGame_003.pkgpart";
+    std::string p4 = test_dir + "/TestGame_004.pkgpart";
+
+    {
+        std::ofstream(p1, std::ios::binary).write("OLD_PART_1", 10);
+        std::ofstream(p2, std::ios::binary).write("OLD_PART_2", 10);
+        std::ofstream(p3, std::ios::binary).write("OLD_PART_3", 10);
+        std::ofstream(p4, std::ios::binary).write("OLD_PART_4", 10);
+    }
+    assert(splitter::file_exists(p1));
+    assert(splitter::file_exists(p2));
+    assert(splitter::file_exists(p3));
+    assert(splitter::file_exists(p4));
+
+    std::string input_path = test_dir + "/TestGame.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(200, 'Z');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = true;
+
+    auto result = splitter::split_file(input_path, options);
+    assert(result.status == splitter::SplitStatus::SUCCESS);
+    assert(result.parts_count == 2);
+
+    assert(splitter::file_exists(p1));
+    assert(splitter::file_exists(p2));
+    struct stat st1, st2;
+    stat(p1.c_str(), &st1);
+    stat(p2.c_str(), &st2);
+    assert(st1.st_size == 100);
+    assert(st2.st_size == 100);
+
+    // Obsolete parts 3 and 4 removed
+    assert(!splitter::file_exists(p3));
+    assert(!splitter::file_exists(p4));
+
+    cleanup_test_dir(test_dir);
+    std::cout << "[PASS] test_splitter_obsolete_parts_cleanup_on_overwrite (Fix [P1] verified)\n";
+}
+
+void test_splitter_default_output_location() {
+    std::string nested_dir = "/tmp/pkg_splitter_nested_source";
+    mkdir(nested_dir.c_str(), 0777);
+
+    std::string input_path = nested_dir + "/SourceGame.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(100, 'X');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = "";
+    options.force_overwrite = true;
+
+    auto result = splitter::split_file(input_path, options);
+    assert(result.status == splitter::SplitStatus::SUCCESS);
+    assert(result.parts_count == 1);
+
+    std::string wrong_location = nested_dir + "/SourceGame_001.pkgpart";
+    assert(!splitter::file_exists(wrong_location));
+
+    std::string expected_cwd_location = "SourceGame_001.pkgpart";
+    assert(splitter::file_exists(expected_cwd_location));
+
+    std::remove(expected_cwd_location.c_str());
+    std::remove(input_path.c_str());
+    rmdir(nested_dir.c_str());
+
+    std::cout << "[PASS] test_splitter_default_output_location (Fix [P2] verified: cwd preserved)\n";
+}
+
 // -------------------------------------------------------------
 // End-to-End Split-and-Merge Integration Test
 // -------------------------------------------------------------
@@ -498,6 +583,8 @@ int main() {
     test_splitter_non_boundary();
     test_splitter_zero_byte_and_invalid_args();
     test_splitter_overwrite_guard();
+    test_splitter_obsolete_parts_cleanup_on_overwrite();
+    test_splitter_default_output_location();
 
     std::cout << "\n=== Running Split & Merge Integration Tests ===\n";
     test_split_and_merge_roundtrip();

@@ -22,7 +22,7 @@ struct SplitOptions {
     // Default chunk size is 15 GB (15,000 MB in decimal notation as original)
     uint64_t chunk_size_bytes = 15000ULL * 1000000ULL;
     bool force_overwrite = false;
-    std::string output_dir = ""; // Empty string uses the input file's directory / current directory
+    std::string output_dir = ""; // Empty string writes to current working directory
 };
 
 struct SplitResult {
