@@ -271,16 +271,25 @@ int main(void)
         userTextStream << "\nTotal size: " << (totalSize / (1024 * 1024)) << " MB\n";
         userTextStream << "Estimated time: " << formatTime(estimatedTimeInSeconds) << "\n";
 
-        // Pre-flight free-space check (Fix #7)
+        // Pre-flight free-space check with 2x multiplier (Fix #7, Review P2)
+        uint64_t required_space = 0;
+        bool mult_ok = merger::compute_required_space(totalSize, merger::FREE_SPACE_MULTIPLIER, required_space);
+
         uint64_t available_space = 0;
-        if (merger::get_available_space("/data/pkg", available_space))
+        if (!mult_ok)
+        {
+            userTextStream << "\n[ERROR] Package total size exceeds maximum supported limits.\n";
+        }
+        else if (merger::get_available_space("/data/pkg", available_space))
         {
             userTextStream << "Available space on /data/pkg: " << (available_space / (1024 * 1024)) << " MB\n";
-            if (available_space < totalSize)
+            userTextStream << "Required free space (" << merger::FREE_SPACE_MULTIPLIER << "x): " << (required_space / (1024 * 1024)) << " MB\n";
+
+            if (available_space < required_space)
             {
-                userTextStream << "\n[ERROR] Insufficient disk space! Required: "
-                               << (totalSize / (1024 * 1024)) << " MB, Available: "
-                               << (available_space / (1024 * 1024)) << " MB.\n"
+                userTextStream << "\n[ERROR] Insufficient disk space!\n"
+                               << "Required (2x package size): " << (required_space / (1024 * 1024)) << " MB\n"
+                               << "Available: " << (available_space / (1024 * 1024)) << " MB.\n"
                                << "Please free up disk space on PS4 internal storage before merging.\n";
             }
             else
@@ -307,6 +316,7 @@ int main(void)
             listen = true;
         }
     }
+
     
     for (;;)
     {

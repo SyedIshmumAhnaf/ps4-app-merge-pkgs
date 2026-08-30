@@ -137,12 +137,20 @@ void test_phase2_output_and_merge() {
     uint64_t total_size = merger::calculate_total_parts_size(test_dir, part_files);
     assert(total_size == 36);
 
+    // Test compute_required_space and overflow handling (Fix #7 / P2)
+    uint64_t req_space = 0;
+    assert(merger::compute_required_space(total_size, merger::FREE_SPACE_MULTIPLIER, req_space));
+    assert(req_space == 72);
+
+    uint64_t overflow_out = 0;
+    assert(!merger::compute_required_space(UINT64_MAX / 2 + 1, 2, overflow_out));
+
     // Test get_available_space
     uint64_t free_bytes = 0;
     assert(merger::get_available_space(test_dir, free_bytes));
     assert(free_bytes > 0);
 
-    // Test perform_merge happy path
+    // Test perform_merge happy path (atomically written and renamed from .tmp.merging)
     uint64_t progress_last_processed = 0;
     auto progress_cb = [](uint64_t processed, uint64_t total) {
         assert(total == 36);
@@ -152,9 +160,9 @@ void test_phase2_output_and_merge() {
     auto res = merger::perform_merge(test_dir, part_files, output_path, progress_cb);
     (void)progress_last_processed;
     assert(res.status == merger::MergeStatus::SUCCESS);
-
     assert(res.bytes_written == 36);
     assert(merger::file_exists(output_path));
+    assert(!merger::file_exists(output_path + ".tmp.merging")); // temp file cleanly removed / renamed
 
     // Verify content
     {
@@ -163,15 +171,29 @@ void test_phase2_output_and_merge() {
         assert(content == "CHUNK1_DATA_CHUNK2_DATA_CHUNK3_DATA!");
     }
 
-    // Test missing input part handling and cleanup
+    // Test overwrite preservation on failure (Fix #5 & Fix #6 / P1):
+    // When output_path already has existing valid content and a merge fails mid-way,
+    // the temporary file is deleted and the existing file at output_path remains untouched!
+    {
+        // Existing file has valid content "PREVIOUS_EXISTING_PKG"
+        std::ofstream existing(output_path, std::ios::binary);
+        existing.write("PREVIOUS_EXISTING_PKG", 21);
+    }
+
     std::vector<std::string> broken_parts = {
         "TestGame_001.pkgpart",
         "TestGame_NonExistent_002.pkgpart"
     };
-    std::string broken_output = test_dir + "/Broken.pkg";
-    auto fail_res = merger::perform_merge(test_dir, broken_parts, broken_output);
+    auto fail_res = merger::perform_merge(test_dir, broken_parts, output_path);
     assert(fail_res.status == merger::MergeStatus::INPUT_OPEN_ERROR);
-    assert(!merger::file_exists(broken_output)); // partial file cleaned up!
+    assert(!merger::file_exists(output_path + ".tmp.merging")); // temp file cleaned up
+
+    // Verify existing file at output_path was NOT truncated or destroyed
+    {
+        std::ifstream untouched(output_path, std::ios::binary);
+        std::string content((std::istreambuf_iterator<char>(untouched)), std::istreambuf_iterator<char>());
+        assert(content == "PREVIOUS_EXISTING_PKG");
+    }
 
     // Cleanup
     std::remove(part1_path.c_str());
@@ -182,6 +204,7 @@ void test_phase2_output_and_merge() {
 
     std::cout << "[PASS] test_phase2_output_and_merge\n";
 }
+
 
 int main() {
     test_filename_parser();

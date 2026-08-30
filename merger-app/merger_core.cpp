@@ -157,6 +157,18 @@ bool file_exists(const std::string& path) {
     return (stat(path.c_str(), &st) == 0);
 }
 
+bool compute_required_space(uint64_t total_parts_size, uint64_t multiplier, uint64_t& out_required_bytes) {
+    if (multiplier == 0) {
+        out_required_bytes = total_parts_size;
+        return true;
+    }
+    if (total_parts_size > UINT64_MAX / multiplier) {
+        return false; // overflow
+    }
+    out_required_bytes = total_parts_size * multiplier;
+    return true;
+}
+
 bool get_available_space(const std::string& target_path, uint64_t& out_free_bytes) {
     struct statvfs stat;
     // If target_path doesn't exist yet, inspect its parent directory
@@ -207,10 +219,16 @@ MergeResult perform_merge(
 
     uint64_t total_expected_bytes = calculate_total_parts_size(input_dir, files);
 
-    std::ofstream output_file(output_path, std::ios::binary);
+    // [P1] Write to a temporary path until the merge completes.
+    // This ensures power loss, crash, or early abort leaves no partial file at output_path,
+    // and preserves any existing output_path until the new file is fully written, flushed, and closed.
+    std::string temp_output_path = output_path + ".tmp.merging";
+    std::remove(temp_output_path.c_str());
+
+    std::ofstream output_file(temp_output_path, std::ios::binary);
     if (!output_file.is_open()) {
         result.status = MergeStatus::OUTPUT_OPEN_ERROR;
-        result.error_message = "Failed to open output file for writing: " + output_path;
+        result.error_message = "Failed to open temporary output file for writing: " + temp_output_path;
         return result;
     }
 
@@ -227,7 +245,7 @@ MergeResult perform_merge(
         std::ifstream input_file(full_path, std::ios::binary);
         if (!input_file.is_open()) {
             output_file.close();
-            std::remove(output_path.c_str());
+            std::remove(temp_output_path.c_str());
             result.status = MergeStatus::INPUT_OPEN_ERROR;
             result.error_message = "Failed to open input part: " + full_path;
             return result;
@@ -241,7 +259,7 @@ MergeResult perform_merge(
             if (!output_file.good()) {
                 input_file.close();
                 output_file.close();
-                std::remove(output_path.c_str());
+                std::remove(temp_output_path.c_str());
                 result.status = MergeStatus::WRITE_ERROR;
                 result.error_message = "Write error occurred while merging " + file + " (likely disk full or I/O error).";
                 return result;
@@ -256,7 +274,7 @@ MergeResult perform_merge(
         if (input_file.bad()) {
             input_file.close();
             output_file.close();
-            std::remove(output_path.c_str());
+            std::remove(temp_output_path.c_str());
             result.status = MergeStatus::READ_ERROR;
             result.error_message = "Read error occurred while reading " + full_path;
             return result;
@@ -268,21 +286,30 @@ MergeResult perform_merge(
     output_file.flush();
     if (!output_file.good()) {
         output_file.close();
-        std::remove(output_path.c_str());
+        std::remove(temp_output_path.c_str());
         result.status = MergeStatus::WRITE_ERROR;
-        result.error_message = "Failed to flush output stream to " + output_path;
+        result.error_message = "Failed to flush output stream to " + temp_output_path;
         return result;
     }
 
     output_file.close();
     if (output_file.fail()) {
-        std::remove(output_path.c_str());
+        std::remove(temp_output_path.c_str());
         result.status = MergeStatus::WRITE_ERROR;
-        result.error_message = "Failed to cleanly close output file: " + output_path;
+        result.error_message = "Failed to cleanly close output file: " + temp_output_path;
+        return result;
+    }
+
+    // Atomic move/rename from temp path to destination path
+    if (std::rename(temp_output_path.c_str(), output_path.c_str()) != 0) {
+        std::remove(temp_output_path.c_str());
+        result.status = MergeStatus::WRITE_ERROR;
+        result.error_message = "Failed to rename temporary file to destination path: " + output_path;
         return result;
     }
 
     return result;
+
 }
 
 } // namespace merger

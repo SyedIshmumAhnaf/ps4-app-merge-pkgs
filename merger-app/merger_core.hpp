@@ -47,9 +47,17 @@ ValidationResult validate_and_prepare_parts(const std::vector<std::string>& file
 // Checks if a file exists at the given path (Fix #5)
 bool file_exists(const std::string& path);
 
+// Free-space safety multiplier documented in README (Fix #7)
+constexpr uint64_t FREE_SPACE_MULTIPLIER = 2;
+
+// Computes required free space given the total size of pkg parts, handling overflow safely.
+// Returns false if overflow occurs.
+bool compute_required_space(uint64_t total_parts_size, uint64_t multiplier, uint64_t& out_required_bytes);
+
 // Queries available free disk space on the volume containing target_path (Fix #7)
 // Returns available bytes in out_free_bytes. Returns false on error.
 bool get_available_space(const std::string& target_path, uint64_t& out_free_bytes);
+
 
 // Calculates the total size in bytes of the listed input files within input_dir
 uint64_t calculate_total_parts_size(const std::string& input_dir, const std::vector<std::string>& files);
