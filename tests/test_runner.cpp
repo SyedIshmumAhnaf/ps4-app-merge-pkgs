@@ -501,6 +501,92 @@ void test_splitter_default_output_location() {
     std::cout << "[PASS] test_splitter_default_output_location (Fix [P2] verified: cwd preserved)\n";
 }
 
+void test_splitter_distinct_package_prefix_preservation() {
+    std::string test_dir = "/tmp/pkg_splitter_test_prefix_guard";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string game_p1 = test_dir + "/Game_001.pkgpart";
+    std::string game_p2 = test_dir + "/Game_002.pkgpart";
+    std::string dlc_p1 = test_dir + "/Game_DLC_001.pkgpart";
+    std::string update_p1 = test_dir + "/Game_Update_001.pkgpart";
+
+    {
+        std::ofstream(game_p1, std::ios::binary).write("GAME_PART_1", 11);
+        std::ofstream(game_p2, std::ios::binary).write("GAME_PART_2", 11);
+        std::ofstream(dlc_p1, std::ios::binary).write("DLC_PART_1", 10);
+        std::ofstream(update_p1, std::ios::binary).write("UPDATE_PART_1", 13);
+    }
+
+    auto matched_files = splitter::find_existing_part_files(test_dir, "Game");
+    assert(matched_files.size() == 2);
+    assert(matched_files[0] == game_p1);
+    assert(matched_files[1] == game_p2);
+
+    std::string input_path = test_dir + "/Game.pkg";
+    {
+        std::ofstream src(input_path, std::ios::binary);
+        std::string dummy(100, 'G');
+        src.write(dummy.data(), dummy.size());
+    }
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = true;
+
+    auto result = splitter::split_file(input_path, options);
+    assert(result.status == splitter::SplitStatus::SUCCESS);
+    assert(result.parts_count == 1);
+
+    assert(splitter::file_exists(game_p1));
+    assert(!splitter::file_exists(game_p2));
+
+    assert(splitter::file_exists(dlc_p1));
+    assert(splitter::file_exists(update_p1));
+
+    std::remove(game_p1.c_str());
+    std::remove(dlc_p1.c_str());
+    std::remove(update_p1.c_str());
+    std::remove(input_path.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_splitter_distinct_package_prefix_preservation (Fix [P1] verified: DLC/Update not deleted)\n";
+}
+
+void test_splitter_obsolete_cleanup_error_propagation() {
+    std::string test_dir = "/tmp/pkg_splitter_test_unlink_fail";
+    mkdir(test_dir.c_str(), 0777);
+
+    std::string p1 = test_dir + "/TestGame_001.pkgpart";
+    std::string p2 = test_dir + "/TestGame_002.pkgpart";
+    std::string input_path = "/tmp/TestGame.pkg";
+
+    {
+        std::ofstream(p1, std::ios::binary).write("CHUNK_1", 7);
+        std::ofstream(p2, std::ios::binary).write("CHUNK_2", 7);
+        std::ofstream(input_path, std::ios::binary).write("NEW_CHUNK_1", 11);
+    }
+
+    chmod(test_dir.c_str(), 0555);
+
+    splitter::SplitOptions options;
+    options.chunk_size_bytes = 100;
+    options.output_dir = test_dir;
+    options.force_overwrite = true;
+
+    auto result = splitter::split_file(input_path, options);
+    assert(result.status == splitter::SplitStatus::WRITE_ERROR);
+    assert(!result.error_message.empty());
+
+    chmod(test_dir.c_str(), 0777);
+    std::remove(p1.c_str());
+    std::remove(p2.c_str());
+    std::remove(input_path.c_str());
+    rmdir(test_dir.c_str());
+
+    std::cout << "[PASS] test_splitter_obsolete_cleanup_error_propagation (Fix [P2] verified: deletion error propagated)\n";
+}
+
 // -------------------------------------------------------------
 // End-to-End Split-and-Merge Integration Test
 // -------------------------------------------------------------
@@ -585,6 +671,8 @@ int main() {
     test_splitter_overwrite_guard();
     test_splitter_obsolete_parts_cleanup_on_overwrite();
     test_splitter_default_output_location();
+    test_splitter_distinct_package_prefix_preservation();
+    test_splitter_obsolete_cleanup_error_propagation();
 
     std::cout << "\n=== Running Split & Merge Integration Tests ===\n";
     test_split_and_merge_roundtrip();

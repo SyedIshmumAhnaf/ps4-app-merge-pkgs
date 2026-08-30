@@ -7,6 +7,8 @@
 #include <sys/stat.h>
 #include <dirent.h>
 #include <cstdio>
+#include <cctype>
+#include <cerrno>
 #include <algorithm>
 
 namespace splitter {
@@ -87,9 +89,28 @@ std::vector<std::string> find_existing_part_files(const std::string& output_dir,
         if (fname.size() > prefix.size() + suffix.size() &&
             fname.compare(0, prefix.size(), prefix) == 0 &&
             fname.compare(fname.size() - suffix.size(), suffix.size(), suffix) == 0) {
-            std::string full_path = output_dir.empty() ? fname :
-                (output_dir.back() == '/' || output_dir.back() == '\\' ? output_dir + fname : output_dir + "/" + fname);
-            existing.push_back(full_path);
+            
+            std::string part_digits = fname.substr(prefix.size(), fname.size() - prefix.size() - suffix.size());
+            bool all_digits = !part_digits.empty();
+            for (char c : part_digits) {
+                if (!std::isdigit(static_cast<unsigned char>(c))) {
+                    all_digits = false;
+                    break;
+                }
+            }
+
+            if (all_digits) {
+                try {
+                    unsigned long idx = std::stoul(part_digits);
+                    if (idx > 0) {
+                        std::string full_path = output_dir.empty() ? fname :
+                            (output_dir.back() == '/' || output_dir.back() == '\\' ? output_dir + fname : output_dir + "/" + fname);
+                        existing.push_back(full_path);
+                    }
+                } catch (...) {
+                    // Ignore arithmetic overflow in part number string
+                }
+            }
         }
     }
     closedir(dir);
@@ -276,12 +297,18 @@ SplitResult split_file(
         }
     }
 
-    // If overwrite was forced, clean up any obsolete higher-numbered or leftover parts from previous runs (Fix review: [P1])
+    // If overwrite was forced, clean up any obsolete higher-numbered or leftover parts from previous runs (Fix review: [P1] & [P2])
     if (options.force_overwrite) {
         std::vector<std::string> current_matching = find_existing_part_files(effective_output_dir, base_name);
         for (const auto& existing_file : current_matching) {
             if (std::find(created_parts.begin(), created_parts.end(), existing_file) == created_parts.end()) {
-                std::remove(existing_file.c_str());
+                if (std::remove(existing_file.c_str()) != 0) {
+                    if (errno != ENOENT) {
+                        result.status = SplitStatus::WRITE_ERROR;
+                        result.error_message = "Failed to remove obsolete part file: " + existing_file;
+                        return result;
+                    }
+                }
             }
         }
     }
