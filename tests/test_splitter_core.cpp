@@ -14,7 +14,8 @@ static void cleanup_test_dir(const std::string& dir) {
     std::string p3 = dir + "/TestGame_003.pkgpart";
     std::string p4 = dir + "/TestGame_004.pkgpart";
     std::string src = dir + "/TestGame.pkg";
-    std::string empty = dir + "/Empty.pkg";
+    std::string m1 = dir + "/TestGame.manifest.json";
+    std::string m2 = dir + "/Empty.manifest.json";
 
     std::remove(p1.c_str());
     std::remove(p2.c_str());
@@ -22,6 +23,8 @@ static void cleanup_test_dir(const std::string& dir) {
     std::remove(p4.c_str());
     std::remove(src.c_str());
     std::remove(empty.c_str());
+    std::remove(m1.c_str());
+    std::remove(m2.c_str());
     rmdir(dir.c_str());
 }
 

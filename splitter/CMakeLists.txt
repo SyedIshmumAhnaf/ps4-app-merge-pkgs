@@ -4,4 +4,11 @@ project(splitter)
 set(CMAKE_CXX_STANDARD 11)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-add_executable(splitter main.cpp splitter_core.cpp)
+include_directories(${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/../common)
+
+add_executable(splitter
+    main.cpp
+    splitter_core.cpp
+    ../common/sha256.cpp
+    ../common/manifest.cpp
+)

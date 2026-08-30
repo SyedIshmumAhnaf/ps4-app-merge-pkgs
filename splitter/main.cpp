@@ -120,6 +120,10 @@ int main(int argc, char *argv[]) {
     for (const auto& part : result.generated_parts) {
         std::cout << "  Created: " << part << "\n";
     }
+    if (!result.manifest_path.empty()) {
+        std::cout << "  Manifest: " << result.manifest_path << "\n";
+        std::cout << "  SHA-256:  " << result.sha256 << "\n";
+    }
 
     return 0;
 }
