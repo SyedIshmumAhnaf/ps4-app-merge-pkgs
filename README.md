@@ -1,70 +1,150 @@
-# PlayStation 4 app to merge pkgs on the console itself
+# PlayStation 4 App to Merge PKGs (Hardened Fork)
 
-For those of us who only have 32 gb flash drive and too slow poor router for remote game transferring...
+A hardened utility to merge multi-part split PKG files directly on a PlayStation 4 console. Designed for setups with FAT32 / 32 GB flash drives or slow local network transfers where moving multi-gigabyte packages in full single files is impractical.
 
 ![Screenshot](https://github.com/user-attachments/assets/b2c619ee-6c5e-4d0e-bd11-3263f3ccb30a)
 
+> [!NOTE]
+> **Provenance & Attribution**: This repository is a hardened fork of [`VityaSchel/ps4-app-merge-pkgs`](https://github.com/VityaSchel/ps4-app-merge-pkgs) (upstream: [`git.hloth.dev/hloth/ps4-app-merge-pkgs`](https://git.hloth.dev/hloth/ps4-app-merge-pkgs)). It introduces end-to-end data integrity manifests, on-the-fly streaming SHA-256 verification, strict input validation, disk-space pre-flight guards, and atomic file publication.
+
+---
+
+## Key Hardening Enhancements
+
+- **Input Safety & Multi-Package Guard (Fixes #1–#4)**:
+  - Strict `.pkgpart` format validation requiring `<basename>_<3+digits>.pkgpart`.
+  - Hard refusal if multiple distinct package base names exist in `/data/pkg_merger`.
+  - Contiguity verification starting at `_001` with zero missing, out-of-order, or duplicate parts.
+- **Output Safety & Pre-Flight Space Check (Fixes #5–#7)**:
+  - Explicit interactive overwrite confirmation prompt before modifying existing output PKGs.
+  - Pre-flight free disk space verification requiring 2× package size available on `/data/pkg`.
+  - Safe temporary staging (`<name>.pkg.tmp.merging`) with atomic replacement (`rename()`) and automatic stale temp file cleanup on retry.
+- **Splitter Reliability & Atomic Manifests (Fixes #8–#11)**:
+  - Exact EOF boundary handling eliminating trailing zero-byte part files.
+  - Overwrite guard with `--force` flag and automatic obsolete part cleanup.
+  - Atomic generation of `<basename>.manifest.json` recording original file size, chunk geometry, and SHA-256 digest.
+- **End-to-End On-the-Fly Verification & Retained Failures (Fix #12)**:
+  - Single-pass streaming SHA-256 verification computed during merging (no costly second read pass).
+  - Corrupt/mismatched outputs are safely retained as `<name>.pkg.checksum-failed(.N)` for inspection rather than leaving broken PKGs at destination.
+- **Security & Supply Chain (Fixes #13–#15)**:
+  - Safe bounded string formatting (`vsnprintf`) across message dialogs.
+  - Standardized release checksum automation and documented binary provenance.
+
+---
+
+## How to Use It
+
+### 1. Split PKG on PC
+
+Download the `splitter` binary for your operating system from Releases (or build from source):
+
+```bash
+# Split with default 15 GB (15,000 MB) chunk size
+./splitter /path/to/Game.pkg
+
+# Or specify custom chunk size in megabytes (e.g. 4000 MB for FAT32 flash drives)
+./splitter -c 4000 /path/to/Game.pkg
+```
+
+This generates:
+- Split parts: `Game_001.pkgpart`, `Game_002.pkgpart`, ...
+- Integrity manifest: `Game.manifest.json`
+
+### 2. Transfer Files to PS4 (`/data/pkg_merger`)
+
+Transfer all `.pkgpart` files **and** the accompanying `Game.manifest.json` to `/data/pkg_merger` on the PS4.
+
 > [!IMPORTANT]
-> I'm looking for a job! Interested in hiring me? Visit [cv.hloth.dev](https://cv.hloth.dev) to review my resume & CV.
+> **Clean Directory Requirement**: `/data/pkg_merger` must contain part files for **only one package at a time**. The merger will refuse to proceed if files from multiple packages are mixed together.
 
-## How to use it
+**Transfer Methods:**
+- **Via Direct Network FTP**: Connect from your PC to the PS4 FTP server (e.g., GoldHEN FTP on port 2121 or 1337) and upload the `.pkgpart` files and `.manifest.json` directly into `/data/pkg_merger`.
+- **Via USB Drive & PS4-Xplorer 2.0**:
+  1. Copy the `.pkgpart` files and `.manifest.json` to your FAT32/exFAT USB flash drive.
+  2. Plug the USB drive into your PS4.
+  3. Open **PS4-Xplorer 2.0** on the console, navigate to `/mnt/usb0`, and copy/move the files to `/data/pkg_merger`.
 
-1. Download and install the merger itself on your PS4 (IV0000-PKGM40924_00-MERGEFILES000000.pkg) in [releases](https://github.com/VityaSchel/ps4-app-merge-pkgs/releases)
-2. Download the `splitter` binary for your OS in [releases](https://github.com/VityaSchel/ps4-app-merge-pkgs/releases), drag it to your terminal and as a paramter drag the pkg you want to split. 
-   - This program will output splitted pkg files in 15 gb chunks in the current terminal directory. 
-   - For example, this is the resulting command to split detroit become human game: `/Users/me/Downloads/splitter /Users/me/Downloads/Detroit.Become.Human.pkg` (assuming you've downloaded splitter to your Downloads directory along with Detroit.Become.Human.pkg)
-   - You can adjust this size by providing `-c` option which is chunk size in MEGAbytes. For example, `./splitter -c 30000 ./Detroit.Become.Human.pkg` splits pkg in 30 gb chunks (30 * 1000)
-   - After starting splitter, wait patiently and look if .pkgpart files started to appear in the directory where you run this command.
-3. Transfer these splitted parts to your flash drive
-4. After you plug-in your flash drive to your ps4, you have to move these splitted parts to very specific directory: /data/pkg_merger. **It won't exist by default, you must create it in /data directory**. MAKE SURE TO WRITE `pkg_merger` CORRECT! Otherwise this app won't be able to see your splitted pkgs. To copy from usb to /pkg/merger, you should use ps4 xplorer 2.0 from homebrew store, nothing else worked for me, for example FTP simply does not allow you to move files from usb to hdd.
-   1. Go into /mnt/usb0 (usually usb0 but can also be usb1, usb2 and so on). In ps4 xplorer you can just press "left" on your D-PAD to instantly open mounted usb directory.
-   2. Send these splitted files from /mnt/usb0 to /data/pkg_merger. This should take about the same time that took you transferring these files from your pc to flash drive, i.e. 60 mb/s.
-5. Repeat 3 and 4 step for every splitted part of your game. Make sure to not rename files as the app expects them to have _001, _002 and similar suffixes.
-6. Open the app on your ps4 and it should see all files in /data/pkg_merger. Verify that all parts are there on screen in the list, press any button on controller as prompted, confirm merging and the app will start to merge them into single one and place it into internal harddrive (/data/pkg). You must have at least double size of your pkg remaining free space on ps4. The app does not keep parts in RAM, it only has 1 mb buffer to concat parts as stream of bytes.
-7. Finally, the resulted file should appear in goldhen debug installer menu (if you selected Debug Settings -> Package source: all or hdd), install it as usual.
+### 3. Merge on PS4
 
-## Compiling source code
+1. Open **PKG Merger** on your PS4.
+2. The app scans `/data/pkg_merger`, verifies parts and the manifest, and displays the detected package name, part count, total size, and estimated merge time.
+3. Press any button on the controller to initiate the merge.
+4. If an existing PKG exists at `/data/pkg/<name>.pkg`, you will be prompted to confirm overwrite.
+5. The console will merge the parts into `/data/pkg/<name>.pkg` while computing the SHA-256 digest in a single streaming pass.
+6. Upon completion, the hash is verified against `Game.manifest.json`.
+7. Once successfully verified, install the PKG via GoldHEN Package Installer (`Debug Settings` $\rightarrow$ `Package Installer`), and clean up the parts in `/data/pkg_merger`.
 
-### PS4 app
+---
 
-1. Download orbis toolkit
-2. Modify Makefile so that it fits your system's environment (especially CC, CCX, LD, CDIR) section
-3. Run `make` in root directory of repository
+## Compiling from Source
 
-### Splitter
+### 1. Splitter (Desktop — macOS, Linux, Windows)
 
-1. Download cmake
-2. Go to splitter/build and run `cmake ..`
-3. Run `make` in the same directory
+Prerequisites: CMake 3.10+ and a C++17 compiler (`clang++`, `g++`, or MSVC).
 
-## Troubleshootig
+```bash
+cd splitter
+cmake -B build -S .
+cmake --build build
+```
 
-### Errors when running splitter such as "illegal instruction"
+### 2. Running the Desktop Test Suite
 
-Most likely it's because splitter wasn't built for your OS, you must build it from source or use any other splitting program out there, just make sure that it splits exactly in sorted parts without modifying parts contents and that parts are named properly (all have basename + _001.pkgpart suffix and so on)
+The core merger and splitter logic is fully decoupled from Orbis OS APIs, allowing native verification on macOS and Linux:
 
-### "Errored" when transferring files from usb to hdd in ps4 xplorer
+```bash
+clang++ -std=c++17 -Icommon -Imerger-app -Isplitter -Itests \
+  tests/test_runner.cpp tests/test_crypto_manifest.cpp \
+  common/*.cpp merger-app/merger_core.cpp splitter/splitter_core.cpp \
+  -o tests/test_runner
 
-That happens sometimes and I have no idea why. The better approach would be to eliminate need for ps4 xplorer at all and read parts directly from usb and write to resulting file, but I tried and it didn't work with sandboxed app access, and I have no idea how to use root access with orbis toolchain.
+./tests/test_runner
+```
 
-What can you do? Try to rebuild splitter/main.cpp and change chunk size. Sometimes it helps, for example decrease from 5 gb to 2 gb and transfer new parts to your ps4.
+### 3. PS4 Merger App (Homebrew PKG)
 
-### My ps4 won't respond to any interactions
+Prerequisites:
+- [OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain) (v0.5.2 or newer)
+- LLVM / Clang configured for `x86_64-pc-freebsd12-elf` target with `ld.lld`
+- OpenOrbis helper tools: `create-fself`, `create-gp4`, `PkgTool.Core`
 
-This just happens.
+```bash
+# Export the OpenOrbis toolchain directory
+export OO_PS4_TOOLCHAIN=/opt/OpenOrbis/PS4-Toolchain
 
-Now beg for your hdd to not be corrupted and hold power button for 10-30 seconds, until you hear beep. Restart your ps4 shortly after and either get shameful message about how correct ps4 shutdown should be made from its menu or terrifying message that your hdd is corrupted.
+# Build the PS4 homebrew PKG
+make
+```
 
-### Trying to install resulted pkg errors with CE-38603-0
+---
 
-Go to notifictions -> find the game you're trying to install in list and remove stuck installation in the list.
+## Supply Chain & Binary Provenance
 
-Source: https://www.reddit.com/r/ps4homebrew/comments/hybr5z/solved_error_ce386030/
+- **Bundled Binaries**:
+  - `sce_module/libSceFios2.prx` & `sce_module/libc.prx`: Standard runtime stub modules from the OpenOrbis SDK required for dynamic linking on Orbis OS.
+  - `sce_sys/about/right.sprx`: Standard Orbis system module for application metadata and licensing display.
+- **Release Verification**:
+  - Official release packages and binaries are accompanied by `SHA256SUMS.txt`.
+  - Checksums can be automatically generated before release using:
+    ```bash
+    ./scripts/generate_release_checksums.sh <dist_directory>
+    ```
 
-## Support me
+---
 
-[hloth.dev/donate](https://hloth.dev/donate)
+## Troubleshooting
+
+- **Error: "Found multiple package base names"**:
+  - Delete or move unrelated `.pkgpart` files from `/data/pkg_merger`. The app requires a clean single-game directory.
+- **Error: "Insufficient disk space"**:
+  - Ensure `/data/pkg` has at least 2× the size of the unmerged PKG in free space before starting.
+- **Error: "Checksum verification failed"**:
+  - The merged file's SHA-256 did not match `Game.manifest.json`. The damaged output is retained at `/data/pkg/<name>.pkg.checksum-failed` for inspection. Re-split or re-transfer the corrupted parts.
+- **CE-38603-0 on Package Installation**:
+  - Go to `Notifications` $\rightarrow$ `Downloads`, delete the stuck/failed installation entry, and retry installing from GoldHEN Package Installer.
+
+---
 
 ## License
 
-[~~copyleft my ass, orbis~~ GPLv3](./LICENSE)
+This project is licensed under the [GNU General Public License v3.0](./LICENSE).

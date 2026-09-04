@@ -74,7 +74,7 @@ int show_dialog(int dialog_type, const char * format, ...)
 
     va_list opt;
     va_start(opt, format);
-    vsprintf(str, format, opt);
+    vsnprintf(str, sizeof(str), format, opt);
     va_end(opt);
 
     sceMsgDialogInitialize();
@@ -281,7 +281,7 @@ int main(void)
         userTextStream << "\n[ERROR] " << validation.error_message << "\n";
         if (validation.status == merger::ValidationStatus::EMPTY_INPUT)
         {
-            userTextStream << "You must split your pkgs on PC and move them from /mnt/usb0 to /data/pkg_merger using FTP\n";
+            userTextStream << "You must split your pkgs on PC and transfer them to /data/pkg_merger (using PS4-Xplorer or FTP)\n";
         }
     }
     else
