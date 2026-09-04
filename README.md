@@ -78,9 +78,9 @@ Transfer all `.pkgpart` files **and** the accompanying `Game.manifest.json` to `
 
 ## Compiling from Source
 
-### 1. Splitter (Desktop — macOS, Linux, Windows)
+### 1. Splitter (Desktop — macOS, Linux)
 
-Prerequisites: CMake 3.10+ and a C++17 compiler (`clang++`, `g++`, or MSVC).
+Prerequisites: CMake 3.13+ and a C++17 compiler (`clang++` or `g++`).
 
 ```bash
 cd splitter
