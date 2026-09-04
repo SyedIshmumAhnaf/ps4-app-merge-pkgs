@@ -16,7 +16,7 @@ public:
     void init();
     void update(const void* data, size_t len);
     void update(const std::string& data);
-    
+
     // Finalizes and returns the 32 raw bytes of digest
     std::array<uint8_t, DIGEST_SIZE> final_raw();
 
