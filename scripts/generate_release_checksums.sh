@@ -16,9 +16,9 @@ fi
 echo "[+] Generating SHA-256 checksums for artifacts in '${TARGET_DIR}'..."
 
 mkdir -p "$(dirname "${OUTPUT_FILE}")"
-TARGET_DIR_ABS=$(cd "${TARGET_DIR}" && pwd)
-OUTPUT_DIR_ABS=$(cd "$(dirname "${OUTPUT_FILE}")" && pwd)
-OUTPUT_FILE_ABS="${OUTPUT_DIR_ABS}/$(basename "${OUTPUT_FILE}")"
+TARGET_DIR_PHYS="$(cd "${TARGET_DIR}" && pwd -P)"
+OUTPUT_DIR_PHYS="$(cd "$(dirname "${OUTPUT_FILE}")" && pwd -P)"
+OUTPUT_FILE_PHYS="${OUTPUT_DIR_PHYS}/$(basename "${OUTPUT_FILE}")"
 temp_sums=$(mktemp)
 
 # Determine sha256 tool
@@ -31,10 +31,11 @@ else
     exit 1
 fi
 
-# Find regular files excluding default checksum patterns and the explicit OUTPUT_FILE
+# Find regular files excluding default checksum patterns and the physical OUTPUT_FILE path
 find "${TARGET_DIR}" -maxdepth 1 -type f ! -name "SHA256SUMS*" ! -name "*.sha256" | sort | while read -r file; do
-    file_abs="$(cd "$(dirname "$file")" && pwd)/$(basename "$file")"
-    if [ "${file_abs}" = "${OUTPUT_FILE_ABS}" ]; then
+    file_dir_phys="$(cd "$(dirname "$file")" && pwd -P)"
+    file_phys="${file_dir_phys}/$(basename "$file")"
+    if [ "${file_phys}" = "${OUTPUT_FILE_PHYS}" ]; then
         continue
     fi
     fname=$(basename "$file")
