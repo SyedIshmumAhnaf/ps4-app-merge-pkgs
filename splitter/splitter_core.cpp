@@ -1,4 +1,6 @@
 #include "splitter_core.hpp"
+#include "sha256.hpp"
+#include "manifest.hpp"
 
 #include <fstream>
 #include <iostream>
@@ -10,6 +12,7 @@
 #include <cctype>
 #include <cerrno>
 #include <algorithm>
+#include <unistd.h>
 
 namespace splitter {
 
@@ -144,15 +147,24 @@ SplitResult split_file(
     }
 
     std::string effective_output_dir = options.output_dir;
+    std::string manifest_target_path = manifest::get_manifest_path(effective_output_dir, base_name);
 
-    // Check for existing output part files if force_overwrite is false (Fix #9)
+    // Check for existing output part files or manifest if force_overwrite is false (Fix #9, #11)
     if (!options.force_overwrite) {
         std::vector<std::string> conflicts = find_existing_part_files(effective_output_dir, base_name);
+        if (file_exists(manifest_target_path)) {
+            conflicts.push_back(manifest_target_path);
+        }
         if (!conflicts.empty()) {
             result.status = SplitStatus::OUTPUT_ALREADY_EXISTS;
-            result.error_message = "One or more output part files already exist for " + base_name;
+            result.error_message = "One or more output files or manifest already exist for " + base_name;
             result.existing_conflicts = conflicts;
             return result;
+        }
+    } else {
+        // On --force: invalidate/unlink old manifest before writing any parts (Fix #11 atomic lifecycle)
+        if (file_exists(manifest_target_path)) {
+            std::remove(manifest_target_path.c_str());
         }
     }
 
@@ -182,6 +194,8 @@ SplitResult split_file(
         return result;
     }
 
+    crypto::SHA256 sha_ctx;
+
     constexpr size_t BUFFER_SIZE = 1024 * 1024; // 1 MB buffer
     std::vector<char> buffer(BUFFER_SIZE);
 
@@ -201,6 +215,9 @@ SplitResult split_file(
         if (bytes_read <= 0) {
             break;
         }
+
+        // Single-pass SHA-256 update during read (Fix #11)
+        sha_ctx.update(buffer.data(), static_cast<size_t>(bytes_read));
 
         // Lazily open new chunk file on first byte of chunk
         if (!current_out.is_open()) {
@@ -258,7 +275,7 @@ SplitResult split_file(
         }
     }
 
-    // Check for bad input stream state or premature EOF (Fix review: [P2])
+    // Check for bad input stream state or premature EOF
     if (input_file.bad() || total_bytes_read < total_file_size) {
         if (current_out.is_open()) {
             current_out.close();
@@ -296,13 +313,14 @@ SplitResult split_file(
         }
     }
 
-    // If overwrite was forced, clean up any obsolete higher-numbered or leftover parts from previous runs (Fix review: [P1] & [P2])
+    // If overwrite was forced, clean up any obsolete higher-numbered or leftover parts from previous runs
     if (options.force_overwrite) {
         std::vector<std::string> current_matching = find_existing_part_files(effective_output_dir, base_name);
         for (const auto& existing_file : current_matching) {
             if (std::find(created_parts.begin(), created_parts.end(), existing_file) == created_parts.end()) {
                 if (std::remove(existing_file.c_str()) != 0) {
                     if (errno != ENOENT) {
+                        cleanup_generated_parts(created_parts);
                         result.status = SplitStatus::WRITE_ERROR;
                         result.error_message = "Failed to remove obsolete part file: " + existing_file;
                         return result;
@@ -312,10 +330,35 @@ SplitResult split_file(
         }
     }
 
+    // Finalize SHA-256 and publish sidecar manifest atomically (Fix #11)
+    std::string digest_hex = sha_ctx.final_hex();
+
+    std::string::size_type last_slash = input_file_path.find_last_of("/\\");
+    std::string original_filename = (last_slash == std::string::npos) ? input_file_path : input_file_path.substr(last_slash + 1);
+
+    manifest::PkgManifest m;
+    m.schema_version = manifest::CURRENT_SCHEMA_VERSION;
+    m.original_filename = original_filename;
+    m.package_base_name = base_name;
+    m.total_size_bytes = total_bytes_read;
+    m.chunk_size_bytes = options.chunk_size_bytes;
+    m.chunk_count = created_parts.size();
+    m.sha256 = digest_hex;
+
+    std::string manifest_err;
+    if (!manifest::write_manifest_file_atomic(manifest_target_path, m, manifest_err)) {
+        cleanup_generated_parts(created_parts);
+        result.status = SplitStatus::WRITE_ERROR;
+        result.error_message = "Failed to publish manifest: " + manifest_err;
+        return result;
+    }
+
     result.status = SplitStatus::SUCCESS;
     result.generated_parts = created_parts;
     result.total_bytes_read = total_bytes_read;
     result.parts_count = created_parts.size();
+    result.manifest_path = manifest_target_path;
+    result.sha256 = digest_hex;
     return result;
 }
 

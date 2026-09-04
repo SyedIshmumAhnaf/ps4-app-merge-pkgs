@@ -32,6 +32,8 @@ struct SplitResult {
     std::vector<std::string> existing_conflicts;
     uint64_t total_bytes_read = 0;
     std::size_t parts_count = 0;
+    std::string manifest_path;
+    std::string sha256;
 };
 
 // Extracts the file base name without path or final extension (e.g. "/path/to/Game.pkg" -> "Game")
@@ -55,10 +57,11 @@ bool file_exists(const std::string& path);
 // Converts MB to bytes with overflow checking. Returns false if overflow occurs.
 bool mb_to_bytes(uint64_t mb, uint64_t& out_bytes);
 
-// Core splitting function (Fix #8, #9, #10):
+// Core splitting function (Fix #8, #9, #10, #11):
 // - Prevents trailing empty chunk on exact chunk boundaries (Fix #8)
 // - Guards against silent overwrites unless force_overwrite is true (Fix #9)
 // - Verifies all write and flush/close operations, cleaning up partial files on failure (Fix #10)
+// - Computes streaming SHA-256 and atomically publishes sidecar manifest (Fix #11)
 SplitResult split_file(
     const std::string& input_file_path,
     const SplitOptions& options,

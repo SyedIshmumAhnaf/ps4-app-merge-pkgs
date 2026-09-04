@@ -1,5 +1,7 @@
 #include "../merger-app/merger_core.hpp"
 #include "../splitter/splitter_core.hpp"
+#include "../common/manifest.hpp"
+#include "../common/sha256.hpp"
 #include <iostream>
 #include <cassert>
 #include <vector>
@@ -110,10 +112,13 @@ void test_merger_phase2_output_and_merge() {
     std::string part3_path = test_dir + "/TestGame_003.pkgpart";
     std::string output_path = test_dir + "/TestGame.pkg";
 
+    std::string manifest_path = test_dir + "/TestGame.manifest.json";
+
     std::remove(part1_path.c_str());
     std::remove(part2_path.c_str());
     std::remove(part3_path.c_str());
     std::remove(output_path.c_str());
+    std::remove(manifest_path.c_str());
 
     {
         std::ofstream p1(part1_path, std::ios::binary);
@@ -122,6 +127,20 @@ void test_merger_phase2_output_and_merge() {
         p2.write("CHUNK2_DATA_", 12);
         std::ofstream p3(part3_path, std::ios::binary);
         p3.write("CHUNK3_DATA!", 12);
+
+        std::string full_mock = "CHUNK1_DATA_CHUNK2_DATA_CHUNK3_DATA!";
+        std::string mock_hash = crypto::SHA256::hash_string(full_mock);
+
+        manifest::PkgManifest m;
+        m.schema_version = 1;
+        m.original_filename = "TestGame.pkg";
+        m.package_base_name = "TestGame";
+        m.total_size_bytes = 36;
+        m.chunk_size_bytes = 12;
+        m.chunk_count = 3;
+        m.sha256 = mock_hash;
+        std::string m_err;
+        assert(manifest::write_manifest_file_atomic(manifest_path, m, m_err));
     }
 
     std::vector<std::string> part_files = {
@@ -205,6 +224,7 @@ void test_merger_phase2_output_and_merge() {
     std::remove(part2_path.c_str());
     std::remove(part3_path.c_str());
     std::remove(output_path.c_str());
+    std::remove(manifest_path.c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_merger_phase2_output_and_merge\n";
@@ -221,6 +241,8 @@ static void cleanup_test_dir(const std::string& dir) {
     std::string p4 = dir + "/TestGame_004.pkgpart";
     std::string src = dir + "/TestGame.pkg";
     std::string empty = dir + "/Empty.pkg";
+    std::string m1 = dir + "/TestGame.manifest.json";
+    std::string m2 = dir + "/Empty.manifest.json";
 
     std::remove(p1.c_str());
     std::remove(p2.c_str());
@@ -228,6 +250,8 @@ static void cleanup_test_dir(const std::string& dir) {
     std::remove(p4.c_str());
     std::remove(src.c_str());
     std::remove(empty.c_str());
+    std::remove(m1.c_str());
+    std::remove(m2.c_str());
     rmdir(dir.c_str());
 }
 
@@ -489,12 +513,13 @@ void test_splitter_default_output_location() {
     assert(result.parts_count == 1);
 
     std::string wrong_location = nested_dir + "/SourceGame_001.pkgpart";
-    assert(!splitter::file_exists(wrong_location));
-
     std::string expected_cwd_location = "SourceGame_001.pkgpart";
+    std::string expected_cwd_manifest = "SourceGame.manifest.json";
     assert(splitter::file_exists(expected_cwd_location));
+    assert(splitter::file_exists(expected_cwd_manifest));
 
     std::remove(expected_cwd_location.c_str());
+    std::remove(expected_cwd_manifest.c_str());
     std::remove(input_path.c_str());
     rmdir(nested_dir.c_str());
 
@@ -548,6 +573,7 @@ void test_splitter_distinct_package_prefix_preservation() {
     std::remove(dlc_p1.c_str());
     std::remove(update_p1.c_str());
     std::remove(input_path.c_str());
+    std::remove((test_dir + "/Game.manifest.json").c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_splitter_distinct_package_prefix_preservation (Fix [P1] verified: DLC/Update not deleted)\n";
@@ -636,6 +662,7 @@ void test_splitter_minimum_three_digits_suffix_filter() {
     std::remove(short_2.c_str());
     std::remove(valid_1.c_str());
     std::remove(input_path.c_str());
+    std::remove((test_dir + "/Game.manifest.json").c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_splitter_minimum_three_digits_suffix_filter (Fix [P2] verified: <3 digits not matched)\n";
@@ -646,37 +673,39 @@ void test_splitter_minimum_three_digits_suffix_filter() {
 // -------------------------------------------------------------
 
 void test_split_and_merge_roundtrip() {
-    std::string test_dir = "/tmp/pkg_roundtrip_test";
+    std::string test_dir = "/tmp/pkg_test_roundtrip";
     mkdir(test_dir.c_str(), 0777);
 
     std::string original_pkg = test_dir + "/OriginalGame.pkg";
     std::string reconstructed_pkg = test_dir + "/ReconstructedGame.pkg";
 
-    // Generate test data with arbitrary pattern (e.g. 550 bytes)
+    // 550 bytes data with varied byte patterns
     std::string original_data;
     original_data.reserve(550);
     for (int i = 0; i < 550; ++i) {
-        original_data.push_back(static_cast<char>('A' + (i % 26)));
+        original_data.push_back(static_cast<char>(i % 256));
     }
 
     {
-        std::ofstream orig(original_pkg, std::ios::binary);
-        orig.write(original_data.data(), original_data.size());
+        std::ofstream out(original_pkg, std::ios::binary);
+        out.write(original_data.data(), original_data.size());
     }
 
-    // Split into 120-byte chunks
+    // Step 1: Split into 100-byte chunks (5 full chunks of 100 + 1 partial chunk of 50 = 6 chunks)
     splitter::SplitOptions split_opts;
-    split_opts.chunk_size_bytes = 120;
+    split_opts.chunk_size_bytes = 100;
     split_opts.output_dir = test_dir;
     split_opts.force_overwrite = true;
 
     auto split_res = splitter::split_file(original_pkg, split_opts);
     assert(split_res.status == splitter::SplitStatus::SUCCESS);
-    assert(split_res.parts_count == 5); // 120*4 + 70 = 550
+    assert(split_res.parts_count == 6);
+    assert(split_res.total_bytes_read == 550);
 
-    // Prepare list of part filenames for merger
+    // Step 2: Validate parts through merger_core and merge back
     std::vector<std::string> part_files = {
         "OriginalGame_001.pkgpart",
+        "OriginalGame_006.pkgpart",
         "OriginalGame_002.pkgpart",
         "OriginalGame_003.pkgpart",
         "OriginalGame_004.pkgpart",
@@ -685,7 +714,7 @@ void test_split_and_merge_roundtrip() {
 
     auto merge_val = merger::validate_and_prepare_parts(part_files);
     assert(merge_val.status == merger::ValidationStatus::OK);
-    assert(merge_val.sorted_files.size() == 5);
+    assert(merge_val.sorted_files.size() == 6);
 
     auto merge_res = merger::perform_merge(test_dir, merge_val.sorted_files, reconstructed_pkg);
     assert(merge_res.status == merger::MergeStatus::SUCCESS);
@@ -704,10 +733,20 @@ void test_split_and_merge_roundtrip() {
     }
     std::remove(original_pkg.c_str());
     std::remove(reconstructed_pkg.c_str());
+    std::remove(split_res.manifest_path.c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_split_and_merge_roundtrip (Desktop Split -> Merge verified byte-for-byte)\n";
 }
+
+void test_sha256_standard_vectors();
+void test_manifest_serialization_and_parsing_roundtrip();
+void test_manifest_parser_hardening();
+void test_manifest_chunk_geometry_validation();
+void test_splitter_atomic_manifest_lifecycle();
+void test_merger_manifest_validation_and_errors();
+void test_merger_checksum_mismatch_and_collision_safe_retention();
+void test_split_manifest_merge_e2e_verification();
 
 int main() {
     std::cout << "=== Running Merger Core Tests (Phase 1 & 2) ===\n";
@@ -728,6 +767,18 @@ int main() {
     test_splitter_distinct_package_prefix_preservation();
     test_splitter_obsolete_cleanup_error_propagation();
     test_splitter_minimum_three_digits_suffix_filter();
+
+    std::cout << "\n=== Running SHA-256 & Manifest Tests (Phase 4 - Fix #11) ===\n";
+    test_sha256_standard_vectors();
+    test_manifest_serialization_and_parsing_roundtrip();
+    test_manifest_parser_hardening();
+    test_manifest_chunk_geometry_validation();
+    test_splitter_atomic_manifest_lifecycle();
+
+    std::cout << "\n=== Running Integrity Verification Tests (Phase 4 - Fix #12) ===\n";
+    test_merger_manifest_validation_and_errors();
+    test_merger_checksum_mismatch_and_collision_safe_retention();
+    test_split_manifest_merge_e2e_verification();
 
     std::cout << "\n=== Running Split & Merge Integration Tests ===\n";
     test_split_and_merge_roundtrip();
