@@ -119,8 +119,14 @@ make
 
 ---
 
-## Supply Chain & Binary Provenance
+## Security Boundaries & Supply Chain Provenance
 
+- **Transfer Integrity vs. Authenticity**:
+  - Manifest SHA-256 verification guarantees **transfer integrity** (confirming that the reassembled PKG on the PS4 is a bit-for-bit match to the split file generated on PC, free from transmission or disk corruption).
+  - Manifest verification does **not** prove authenticity, safety, or trustworthiness of the underlying PKG file or its payload. Users remain responsible for validating the provenance of source packages.
+- **Build Reproducibility & Release Artifacts**:
+  - Automated continuous integration (CI) executes the desktop test suite on macOS and Linux, but **release artifacts (desktop splitter binaries and PS4 homebrew PKG packages) are not independently reproducible or built by CI**.
+  - Release assets are accompanied by `SHA256SUMS.txt` so users can detect corruption or modification relative to the published checksums. The checksum file is not a digital signature and does not authenticate the publisher or build environment.
 - **Bundled Binaries & Provenance**:
   - `sce_module/libSceFios2.prx` & `sce_module/libc.prx`: Inherited verbatim from the upstream repository's initial commit (`c9dbaf6`). While they serve as runtime stub modules for dynamic linking on Orbis OS, their original compiler/SDK toolchain provenance is unrecorded in source control.
   - `sce_sys/about/right.sprx`: Inherited verbatim from upstream's initial commit (`c9dbaf6`) for application metadata/licensing display; its exact build provenance is similarly unrecorded.
