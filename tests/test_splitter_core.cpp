@@ -14,6 +14,7 @@ static void cleanup_test_dir(const std::string& dir) {
     std::string p3 = dir + "/TestGame_003.pkgpart";
     std::string p4 = dir + "/TestGame_004.pkgpart";
     std::string src = dir + "/TestGame.pkg";
+    std::string empty = dir + "/Empty.pkg";
     std::string m1 = dir + "/TestGame.manifest.json";
     std::string m2 = dir + "/Empty.manifest.json";
 
@@ -411,6 +412,13 @@ void test_splitter_obsolete_cleanup_error_propagation() {
 
 void test_splitter_minimum_three_digits_suffix_filter() {
     std::string test_dir = "/tmp/pkg_splitter_test_three_digits";
+    std::remove((test_dir + "/Game_1.pkgpart").c_str());
+    std::remove((test_dir + "/Game_01.pkgpart").c_str());
+    std::remove((test_dir + "/Game_001.pkgpart").c_str());
+    std::remove((test_dir + "/Game_002.pkgpart").c_str());
+    std::remove((test_dir + "/Game.pkg").c_str());
+    std::remove((test_dir + "/Game.manifest.json").c_str());
+    rmdir(test_dir.c_str());
     mkdir(test_dir.c_str(), 0777);
 
     std::string short_1 = test_dir + "/Game_1.pkgpart";
@@ -462,6 +470,7 @@ void test_splitter_minimum_three_digits_suffix_filter() {
     std::remove(short_2.c_str());
     std::remove(valid_1.c_str());
     std::remove(input_path.c_str());
+    std::remove((test_dir + "/Game.manifest.json").c_str());
     rmdir(test_dir.c_str());
 
     std::cout << "[PASS] test_splitter_minimum_three_digits_suffix_filter (Fix [P2] verified: <3 digits not matched)\n";

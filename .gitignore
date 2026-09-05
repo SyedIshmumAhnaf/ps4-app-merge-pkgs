@@ -13,7 +13,7 @@ splitter/build-linux/*
 
 ps4-app-merge-pkgs-fork-plan.md
 tests/test_runner
-tests/test_splitter_runner
+tests/test_*_runner
 tests/*.dSYM/
 splitter/splitter
 

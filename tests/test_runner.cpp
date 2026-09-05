@@ -615,6 +615,13 @@ void test_splitter_obsolete_cleanup_error_propagation() {
 
 void test_splitter_minimum_three_digits_suffix_filter() {
     std::string test_dir = "/tmp/pkg_splitter_test_three_digits";
+    std::remove((test_dir + "/Game_1.pkgpart").c_str());
+    std::remove((test_dir + "/Game_01.pkgpart").c_str());
+    std::remove((test_dir + "/Game_001.pkgpart").c_str());
+    std::remove((test_dir + "/Game_002.pkgpart").c_str());
+    std::remove((test_dir + "/Game.pkg").c_str());
+    std::remove((test_dir + "/Game.manifest.json").c_str());
+    rmdir(test_dir.c_str());
     mkdir(test_dir.c_str(), 0777);
 
     std::string short_1 = test_dir + "/Game_1.pkgpart";

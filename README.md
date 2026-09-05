@@ -104,9 +104,10 @@ clang++ -std=c++17 -Icommon -Imerger-app -Isplitter -Itests \
 ### 3. PS4 Merger App (Homebrew PKG)
 
 Prerequisites:
-- [OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain) (v0.5.2 or newer)
-- LLVM / Clang configured for `x86_64-pc-freebsd12-elf` target with `ld.lld`
-- OpenOrbis helper tools: `create-fself`, `create-gp4`, `PkgTool.Core`
+- [OpenOrbis PS4 Toolchain](https://github.com/OpenOrbis/OpenOrbis-PS4-Toolchain) (v0.5.2 or newer, e.g. v0.5.4)
+- LLVM / Clang configured for `x86_64-pc-freebsd12-elf` target with `ld.lld` (Note: Upstream/Homebrew LLVM is required on macOS; Apple Clang is explicitly unsuitable for targeting FreeBSD/Orbis ELF binaries)
+- .NET Runtime (e.g., .NET 6.0+ SDK/Runtime) required for OpenOrbis packaging tools ([LibOrbisPkg](https://github.com/OpenOrbis/LibOrbisPkg))
+- OpenOrbis helper tools in PATH: `create-fself`, `create-gp4`, `PkgTool.Core`
 
 ```bash
 # Export the OpenOrbis toolchain directory

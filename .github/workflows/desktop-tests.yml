@@ -1,0 +1,83 @@
+name: Desktop Hardening Tests
+
+on:
+  push:
+    branches: [ main, hardening, 'feat/**', 'fix/**' ]
+  pull_request:
+    branches: [ main, hardening ]
+
+jobs:
+  test:
+    name: Desktop Validation Suite (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, macos-latest ]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Verify diff hygiene
+        run: |
+          git diff --check HEAD~1 || true
+
+      - name: Build and run combined test runner (C++17, Warnings-as-Errors)
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -Icommon -Imerger-app -Isplitter -Itests \
+            tests/test_runner.cpp tests/test_crypto_manifest.cpp \
+            common/*.cpp merger-app/merger_core.cpp splitter/splitter_core.cpp \
+            -o tests/test_runner
+          ./tests/test_runner
+
+      - name: Build and run standalone merger tests
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -Icommon -Imerger-app -Itests \
+            tests/test_merger_core.cpp merger-app/merger_core.cpp common/*.cpp \
+            -o tests/test_merger_runner
+          ./tests/test_merger_runner
+
+      - name: Build and run standalone splitter tests
+        run: |
+          clang++ -std=c++17 -Wall -Wextra -Werror -pedantic \
+            -Icommon -Isplitter -Itests \
+            tests/test_splitter_core.cpp splitter/splitter_core.cpp common/*.cpp \
+            -o tests/test_splitter_runner
+          ./tests/test_splitter_runner
+
+      - name: Build and run under Sanitizers (ASan + UBSan)
+        run: |
+          clang++ -std=c++17 -fsanitize=address,undefined -g -O1 \
+            -Icommon -Imerger-app -Isplitter -Itests \
+            tests/test_runner.cpp tests/test_crypto_manifest.cpp \
+            common/*.cpp merger-app/merger_core.cpp splitter/splitter_core.cpp \
+            -o tests/test_runner_sanitized
+          ./tests/test_runner_sanitized
+
+      - name: Build Splitter CLI with CMake
+        run: |
+          cd splitter
+          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build --config Release
+          ./build/splitter -v || ./build/splitter 2>&1 | grep -i "Usage"
+
+      - name: Build and run multi-GB integration test
+        run: |
+          clang++ -std=c++17 -O2 -Wall -Wextra -Werror \
+            -Icommon -Imerger-app -Isplitter -Itests \
+            tests/test_large_file_integration.cpp \
+            common/*.cpp merger-app/merger_core.cpp splitter/splitter_core.cpp \
+            -o tests/test_large_file_runner
+          ./tests/test_large_file_runner
+
+      - name: Verify release checksum generator script
+        run: |
+          mkdir -p dist_test
+          cp splitter/build/splitter dist_test/
+          ./scripts/generate_release_checksums.sh dist_test
+          test -f dist_test/SHA256SUMS.txt
+          cat dist_test/SHA256SUMS.txt
+          rm -rf dist_test
