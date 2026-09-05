@@ -11,7 +11,6 @@ splitter/build/*
 splitter/build-linux/*
 !splitter/build-linux/.gitkeep
 
-ps4-app-merge-pkgs-fork-plan.md
 tests/test_runner
 tests/test_*_runner
 tests/test_runner_sanitized
