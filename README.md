@@ -120,9 +120,9 @@ make
 
 ## Supply Chain & Binary Provenance
 
-- **Bundled Binaries**:
-  - `sce_module/libSceFios2.prx` & `sce_module/libc.prx`: Standard runtime stub modules from the OpenOrbis SDK required for dynamic linking on Orbis OS.
-  - `sce_sys/about/right.sprx`: Standard Orbis system module for application metadata and licensing display.
+- **Bundled Binaries & Provenance**:
+  - `sce_module/libSceFios2.prx` & `sce_module/libc.prx`: Inherited verbatim from the upstream repository's initial commit (`c9dbaf6`). While they serve as runtime stub modules for dynamic linking on Orbis OS, their original compiler/SDK toolchain provenance is unrecorded in source control.
+  - `sce_sys/about/right.sprx`: Inherited verbatim from upstream's initial commit (`c9dbaf6`) for application metadata/licensing display; its exact build provenance is similarly unrecorded.
 - **Release Verification**:
   - Official release packages and binaries are accompanied by `SHA256SUMS.txt`.
   - Checksums can be automatically generated before release using:
