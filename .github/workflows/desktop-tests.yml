@@ -18,10 +18,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - name: Verify diff hygiene
         run: |
-          git diff --check HEAD~1 || true
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            git diff --check "origin/${{ github.base_ref }}...HEAD"
+          elif [ -n "${{ github.event.before }}" ] && [ "${{ github.event.before }}" != "0000000000000000000000000000000000000000" ]; then
+            git diff --check "${{ github.event.before }}..HEAD"
+          elif git rev-parse --verify HEAD~1 >/dev/null 2>&1; then
+            git diff --check HEAD~1..HEAD
+          else
+            git diff --check 4b825dc642cb6eb9a060e54bf8d69288fbee4904 HEAD
+          fi
 
       - name: Build and run combined test runner (C++17, Warnings-as-Errors)
         run: |
