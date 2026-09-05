@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main, hardening ]
 
+permissions:
+  contents: read
+
 jobs:
   test:
     name: Desktop Validation Suite (${{ matrix.os }})
