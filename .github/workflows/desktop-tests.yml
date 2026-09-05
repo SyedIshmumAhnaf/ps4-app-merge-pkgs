@@ -44,11 +44,18 @@ jobs:
 
             if [ -z "$BASE_COMMIT" ]; then
               CURRENT_BRANCH="${{ github.ref_name }}"
+              MIN_DISTANCE=""
               for CANDIDATE in "origin/hardening" "origin/main"; do
                 if [ "$CURRENT_BRANCH" != "${CANDIDATE#origin/}" ] && git rev-parse --verify "$CANDIDATE" >/dev/null 2>&1; then
-                  BASE_COMMIT=$(git merge-base HEAD "$CANDIDATE" 2>/dev/null || true)
-                  if [ -n "$BASE_COMMIT" ]; then
-                    break
+                  MB=$(git merge-base HEAD "$CANDIDATE" 2>/dev/null || true)
+                  if [ -n "$MB" ]; then
+                    DIST=$(git rev-list --count "${MB}..HEAD" 2>/dev/null || true)
+                    if [ -n "$DIST" ]; then
+                      if [ -z "$MIN_DISTANCE" ] || [ "$DIST" -lt "$MIN_DISTANCE" ]; then
+                        MIN_DISTANCE="$DIST"
+                        BASE_COMMIT="$MB"
+                      fi
+                    fi
                   fi
                 fi
               done
